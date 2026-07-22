@@ -93,7 +93,9 @@ class SafeCrudTests(unittest.TestCase):
             http_404(),
             {"permissionLevel": "siteOwner"},
         ]
-        service.sites().add().execute.return_value = {}
+        add_request = MagicMock()
+        add_request.execute.return_value = {}
+        service.sites().add.return_value = add_request
         with patch.dict(os.environ, BASE_ENV, clear=True), patch.object(
             google_api, "service", return_value=service
         ):
@@ -108,7 +110,7 @@ class SafeCrudTests(unittest.TestCase):
             )
         self.assertEqual(result["execution_status"], "SUCCEEDED")
         self.assertTrue(result["confirmation_verified"])
-        self.assertEqual(service.sites().add.call_count, 1)
+        add_request.execute.assert_called_once_with()
 
     def test_replay_is_rejected_before_another_api_read(self):
         service = MagicMock()
