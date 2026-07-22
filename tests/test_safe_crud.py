@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from googleapiclient.errors import HttpError
+from httplib2 import Response
 
 from gsc_safe import GscSafetyError
 from gsc_safe import confirmations, google_api
@@ -184,13 +185,9 @@ class SafeCrudTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "INVALID_CONFIRMATION")
 
 
-class Response404:
-    status = 404
-    reason = "Not Found"
-
-
 def http_404() -> HttpError:
-    return HttpError(Response404(), b'{"error":{"message":"not found"}}')
+    response = Response({"status": "404", "reason": "Not Found"})
+    return HttpError(response, b'{"error":{"message":"not found"}}')
 
 
 if __name__ == "__main__":
