@@ -1,6 +1,6 @@
 [project]
 name = "mcp-search-console"
-version = "0.3.2"
+version = "0.4.0"
 description = "Google Search Console integration for Model Context Protocol (MCP)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
     "Topic :: Software Development :: Libraries :: Python Modules"
 ]
@@ -23,12 +24,13 @@ dependencies = [
     "google-auth-httplib2>=0.2.0",
     "google-auth-oauthlib>=1.2.1",
     "mcp[cli]>=1.3.0",
+    "fastmcp>=3.2.0,<4",
     "platformdirs>=4.0.0",
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/AminForou/mcp-gsc"
-"Bug Tracker" = "https://github.com/AminForou/mcp-gsc/issues"
+"Homepage" = "https://github.com/guipmilek/mcp-gsc"
+"Bug Tracker" = "https://github.com/guipmilek/mcp-gsc/issues"
 
 [project.scripts]
 mcp-gsc = "gsc_server:main"
@@ -39,4 +41,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["gsc_server"]
+py-modules = ["gsc_server", "horizon_server"]
+
+[tool.setuptools.packages.find]
+include = ["gsc_safe*"]
