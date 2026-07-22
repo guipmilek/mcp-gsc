@@ -78,14 +78,12 @@ def prepare_operations(
             {"requested": len(raw_list), "maximum": config.max_operations_per_request},
         )
 
+    operations = [normalize_operation(raw, config) for raw in raw_list]
     client = google_api.service()
-    operations: list[dict[str, Any]] = []
-    for raw in raw_list:
-        operation = normalize_operation(raw, config)
+    for operation in operations:
         state = google_api.precondition_state(client, operation)
         operation["precondition_state"] = state
         operation["precondition_hash"] = sha256_json(state)
-        operations.append(operation)
     return operations
 
 
