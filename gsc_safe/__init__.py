@@ -1,7 +1,7 @@
 """Protected Google Search Console mutation facade."""
 
-from .crud import (
-    GscSafetyError,
+from .config import GscSafetyError
+from .tools import (
     gsc_batch_operations,
     gsc_confirmation_diagnostics,
     gsc_create_resource,
