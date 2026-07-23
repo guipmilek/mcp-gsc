@@ -33,17 +33,25 @@ restore operations.
 Delete tools are idempotent. Deleting an already absent Site or Sitemap returns
 success with `ALREADY_ABSENT`.
 
-## Required Horizon configuration
+## Horizon deployment: two keys
 
 ```text
-GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64=<base64-service-account-json>
-GSC_ALLOWED_SITE_URLS=sc-domain:example.com,https://staging.example.com/
-GSC_ALLOWED_SITEMAP_PREFIXES=https://www.example.com/,https://staging.example.com/
-GSC_MAX_OPERATIONS_PER_REQUEST=10
+MCP_CREDENTIALS=<base64-encoded credential envelope>
+MCP_CONFIG={"sites":["sc-domain:example.com"],"sitemaps":["https://www.example.com/"],"max_operations":10}
 ```
 
-The old `GSC_ADMIN_MUTATIONS_ENABLED`, `GSC_ALLOW_*`, and
-`GSC_CONFIRMATION_*` variables are ignored and should be removed.
+The decoded credential envelope is:
+
+```json
+{"google_credentials":{"type":"service_account","project_id":"..."}}
+```
+
+`google_credentials` contains the complete Google credential JSON. No
+additional GSC credential, allowlist, limit, mutation, or confirmation
+variables are used by the Horizon entrypoint. The old
+`GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64`, `GSC_ALLOWED_*`, `GSC_MAX_*`,
+`GSC_ADMIN_MUTATIONS_ENABLED`, `GSC_ALLOW_*`, and `GSC_CONFIRMATION_*`
+deployment variables should be removed.
 
 ## ChatGPT workspace actions
 

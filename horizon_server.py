@@ -10,26 +10,35 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+_ADC_PATH = Path("/tmp/google-search-console-adc.json")
 
-def _configure_credentials_from_base64() -> Path | None:
-    encoded = os.getenv(
-        "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64", ""
-    ).strip()
+
+def _configure_deployment_credentials() -> Path | None:
+    """Materialize Google ADC from the shared MCP_CREDENTIALS envelope."""
+
+    encoded = os.getenv("MCP_CREDENTIALS", "").strip()
     if not encoded:
         return None
     try:
-        raw = base64.b64decode(encoded, validate=True)
-        parsed = json.loads(raw.decode("utf-8"))
+        envelope = json.loads(
+            base64.b64decode(encoded, validate=True).decode("utf-8")
+        )
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(
-            "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64 is not valid base64 JSON."
+            "MCP_CREDENTIALS must be a base64-encoded JSON object."
         ) from exc
-    if not isinstance(parsed, dict):
-        raise RuntimeError("Decoded Google credentials must be a JSON object.")
+    if not isinstance(envelope, dict):
+        raise RuntimeError("MCP_CREDENTIALS must decode to a JSON object.")
+    credentials = envelope.get("google_credentials")
+    if credentials is None:
+        return None
+    if not isinstance(credentials, dict):
+        raise RuntimeError(
+            "MCP_CREDENTIALS.google_credentials must be a JSON object."
+        )
 
-    path = Path(
-        os.getenv("GSC_ADC_PATH", "/tmp/google-search-console-adc.json")
-    )
+    raw = json.dumps(credentials, separators=(",", ":")).encode("utf-8")
+    path = _ADC_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_bytes(raw)
@@ -42,7 +51,7 @@ def _configure_credentials_from_base64() -> Path | None:
     return path
 
 
-_configure_credentials_from_base64()
+_configure_deployment_credentials()
 
 from fastmcp import FastMCP  # noqa: E402
 from fastmcp.tools import Tool  # noqa: E402

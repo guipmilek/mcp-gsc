@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -19,9 +20,13 @@ from gsc_safe.tools import (
 )
 
 BASE_ENV = {
-    "GSC_ALLOWED_SITE_URLS": "sc-domain:example.com",
-    "GSC_ALLOWED_SITEMAP_PREFIXES": "https://www.example.com/",
-    "GSC_MAX_OPERATIONS_PER_REQUEST": "10",
+    "MCP_CONFIG": json.dumps(
+        {
+            "sites": ["sc-domain:example.com"],
+            "sitemaps": ["https://www.example.com/"],
+            "max_operations": 10,
+        }
+    )
 }
 SITE_URL = "sc-domain:example.com"
 SITEMAP_URL = "https://www.example.com/mcp-test.xml"

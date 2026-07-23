@@ -89,7 +89,7 @@ def prepare_operations(
     if len(raw_list) > config.max_operations_per_request:
         raise GscSafetyError(
             "TOO_MANY_OPERATIONS",
-            "The request exceeds GSC_MAX_OPERATIONS_PER_REQUEST.",
+            "The request exceeds MCP_CONFIG.max_operations.",
             {
                 "requested": len(raw_list),
                 "maximum": config.max_operations_per_request,

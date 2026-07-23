@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 CRUD_CONTRACT_VERSION = "direct-crud-v1"
 OPERATION_HASH_VERSION = 4
+DEPLOY_CONFIG_ENV = "MCP_CONFIG"
 
 RESOURCE_REGISTRY: dict[str, dict[str, Any]] = {
     "Site": {
@@ -65,28 +66,64 @@ class ScopeConfig:
     max_operations_per_request: int
 
 
-def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return default
+def _deployment_config() -> Mapping[str, Any]:
+    raw = os.getenv(DEPLOY_CONFIG_ENV, "").strip()
+    if not raw:
+        return {}
     try:
-        value = int(raw)
-    except ValueError as exc:
-        raise GscSafetyError(
-            "INVALID_CONFIGURATION", f"{name} must be an integer."
-        ) from exc
-    if not minimum <= value <= maximum:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
         raise GscSafetyError(
             "INVALID_CONFIGURATION",
-            f"{name} must be between {minimum} and {maximum}.",
+            f"{DEPLOY_CONFIG_ENV} must be a valid JSON object.",
+        ) from exc
+    if not isinstance(value, dict):
+        raise GscSafetyError(
+            "INVALID_CONFIGURATION",
+            f"{DEPLOY_CONFIG_ENV} must be a JSON object.",
+        )
+    supported = {"sites", "sitemaps", "max_operations"}
+    unknown = sorted(set(value) - supported)
+    if unknown:
+        raise GscSafetyError(
+            "INVALID_CONFIGURATION",
+            f"{DEPLOY_CONFIG_ENV} contains unsupported keys.",
+            {"unsupported_keys": unknown, "supported_keys": sorted(supported)},
         )
     return value
 
 
-def split_csv(name: str) -> tuple[str, ...]:
-    return tuple(
-        item.strip() for item in os.getenv(name, "").split(",") if item.strip()
-    )
+def _config_strings(config: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    value = config.get(key, [])
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise GscSafetyError(
+            "INVALID_CONFIGURATION",
+            f"{DEPLOY_CONFIG_ENV}.{key} must be an array of non-empty strings.",
+        )
+    return tuple(item.strip() for item in value)
+
+
+def _config_int(
+    config: Mapping[str, Any],
+    key: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = config.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise GscSafetyError(
+            "INVALID_CONFIGURATION",
+            f"{DEPLOY_CONFIG_ENV}.{key} must be an integer.",
+        )
+    if not minimum <= value <= maximum:
+        raise GscSafetyError(
+            "INVALID_CONFIGURATION",
+            f"{DEPLOY_CONFIG_ENV}.{key} must be between {minimum} and {maximum}.",
+        )
+    return value
 
 
 def canonical_site_url(site_url: str) -> str:
@@ -159,17 +196,18 @@ def canonical_sitemap_url(sitemap_url: str) -> str:
 def load_scope_config() -> ScopeConfig:
     """Load scope on every request so Horizon environment updates apply."""
 
+    config = _deployment_config()
     return ScopeConfig(
         allowed_site_urls=tuple(
             canonical_site_url(value)
-            for value in split_csv("GSC_ALLOWED_SITE_URLS")
+            for value in _config_strings(config, "sites")
         ),
         allowed_sitemap_prefixes=tuple(
             canonical_sitemap_url(value)
-            for value in split_csv("GSC_ALLOWED_SITEMAP_PREFIXES")
+            for value in _config_strings(config, "sitemaps")
         ),
-        max_operations_per_request=env_int(
-            "GSC_MAX_OPERATIONS_PER_REQUEST", 10, 1, 10
+        max_operations_per_request=_config_int(
+            config, "max_operations", 10, 1, 10
         ),
     )
 
@@ -189,9 +227,7 @@ def sha256_json(value: Any) -> str:
 
 def assert_allowed_site(config: ScopeConfig, site_url: str) -> None:
     if not config.allowed_site_urls:
-        raise GscSafetyError(
-            "EMPTY_ALLOWLIST", "GSC_ALLOWED_SITE_URLS is empty."
-        )
+        raise GscSafetyError("EMPTY_ALLOWLIST", "MCP_CONFIG.sites is empty.")
     if site_url not in config.allowed_site_urls:
         raise GscSafetyError(
             "SITE_NOT_ALLOWED",
@@ -202,9 +238,7 @@ def assert_allowed_site(config: ScopeConfig, site_url: str) -> None:
 
 def assert_allowed_sitemap(config: ScopeConfig, sitemap_url: str) -> None:
     if not config.allowed_sitemap_prefixes:
-        raise GscSafetyError(
-            "EMPTY_ALLOWLIST", "GSC_ALLOWED_SITEMAP_PREFIXES is empty."
-        )
+        raise GscSafetyError("EMPTY_ALLOWLIST", "MCP_CONFIG.sitemaps is empty.")
     if not any(
         sitemap_url.startswith(prefix)
         for prefix in config.allowed_sitemap_prefixes

@@ -27,6 +27,7 @@ async def gsc_crud_status() -> dict[str, Any]:
         "contract_version": CRUD_CONTRACT_VERSION,
         "runtime": "PYTHON_FASTMCP_HORIZON",
         "write_mode": "DIRECT",
+        "deployment_env_keys": ["MCP_CREDENTIALS", "MCP_CONFIG"],
         "dry_run_supported": True,
         "approval_workflow": False,
         "allowlists": {

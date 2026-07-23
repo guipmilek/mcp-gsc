@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import base64
 import inspect
+import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+import horizon_server
 from gsc_safe.tools import (
     gsc_add_site,
     gsc_batch_operations,
@@ -18,6 +25,23 @@ from horizon_server import (
 
 
 class DirectToolContractTests(unittest.TestCase):
+    def test_shared_credential_envelope_materializes_adc(self):
+        credentials = {"type": "service_account", "project_id": "test"}
+        encoded = base64.b64encode(
+            json.dumps({"google_credentials": credentials}).encode()
+        ).decode()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "adc.json"
+            with (
+                patch.dict(
+                    os.environ, {"MCP_CREDENTIALS": encoded}, clear=True
+                ),
+                patch.object(horizon_server, "_ADC_PATH", target),
+            ):
+                configured = horizon_server._configure_deployment_credentials()
+                self.assertEqual(target, configured)
+                self.assertEqual(credentials, json.loads(target.read_text()))
+
     def test_public_signatures_have_only_direct_inputs(self):
         self.assertEqual(
             list(inspect.signature(gsc_add_site).parameters),
