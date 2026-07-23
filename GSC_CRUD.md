@@ -38,6 +38,31 @@ This separation prevents a preflight from being classified as a generic write
 tool and prevents callers from selecting `resource`, `action`, `data`, or
 `validate_only` dynamically.
 
+## Short approval codes
+
+Prepare tools return `required_approval_code`. Execute tools accept only the
+corresponding `approval_code` plus the fixed resource arguments.
+
+The code format is deliberately compact and non-JWT-like:
+
+```text
+GSC3-<key-id>-<expiry>-<nonce>-<truncated-hmac>
+```
+
+The code contains no credential or HMAC secret. Its HMAC is bound to:
+
+- operation hash;
+- full precondition hash;
+- allowlisted site URLs;
+- expiration;
+- nonce;
+- signing-key fingerprint.
+
+The execute tool recalculates the operation and current preconditions before
+verifying the code. Codes remain valid across replicas that share the same
+current signing key. Replay registration remains process-local and therefore is
+not globally single-use across replicas.
+
 ## MCP annotations
 
 All Horizon tools declare the complete standard annotation set.
@@ -71,7 +96,7 @@ openWorldHint: false
 
 `openWorldHint=false` reflects that mutable operations are constrained to the
 configured exact site allowlist and sitemap prefix allowlist. Annotations are
-hints only; the connector still enforces all gates, allowlists, confirmations,
+hints only; the connector still enforces all gates, allowlists, approval codes,
 preconditions, replay checks, and post-execution verification.
 
 ## Safety sequence
@@ -80,10 +105,10 @@ preconditions, replay checks, and post-execution verification.
 2. Read current resource state.
 3. Validate action gate, exact site allowlist and sitemap prefix allowlist.
 4. Build a deterministic operation payload and precondition hashes.
-5. Return a local `CONNECTOR_PREFLIGHT` receipt with an HMAC confirmation.
+5. Return a local `CONNECTOR_PREFLIGHT` result with a short HMAC approval code.
 6. Call the matching `gsc_execute_*` tool with the same fixed arguments and the
-   exact receipt.
-7. Verify token version, key ID, signature, TTL, operation hash and preconditions.
+   exact `approval_code`.
+7. Verify code version, key ID, signature, TTL, operation hash and preconditions.
 8. Register process-local replay state before the Google API call.
 9. Execute the single requested operation.
 10. Read the requested resource again and report verification evidence.
@@ -91,7 +116,7 @@ preconditions, replay checks, and post-execution verification.
 The Search Console API has no native dry-run endpoint for these operations.
 The `gsc_prepare_*` tools perform connector-side preflight only and cannot
 execute a mutation. The `gsc_execute_*` tools do not expose a `validate_only`
-switch and reject a missing confirmation before making an API read.
+switch and reject a missing approval code before making an API read.
 
 ## Required environment variables
 
@@ -127,14 +152,16 @@ During a controlled rotation only:
 GSC_CONFIRMATION_PREVIOUS_SECRET=<old-secret>
 ```
 
-Remove it after all pre-rotation receipts have expired. Diagnostics expose only
-non-secret key fingerprints.
+Remove it after all pre-rotation approval codes have expired. Diagnostics expose
+only non-secret key fingerprints.
 
 ## Operational properties
 
 ```text
 operation_hash_version: 3
-confirmation_token_version: 2
+confirmation_token_version: 3
+confirmation_format: SHORT_HMAC_APPROVAL_CODE
+cross_instance_valid: true with matching key ID
 replay_protection: BEST_EFFORT_PROCESS_LOCAL
 globally_single_use: false
 atomic: false
@@ -143,5 +170,5 @@ validation_kind: CONNECTOR_PREFLIGHT
 ```
 
 All replicas must use the same current confirmation secret. For globally
-single-use receipts, replace the process-local replay set with shared durable
-storage before horizontally scaling mutation traffic.
+single-use approval codes, replace the process-local replay set with shared
+durable storage before horizontally scaling mutation traffic.
