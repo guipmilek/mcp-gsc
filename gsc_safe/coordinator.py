@@ -1,4 +1,4 @@
-"""Read/preflight/approve/execute/verify coordinator for GSC mutations."""
+"""Validate, execute, and verify direct GSC CRUD operations."""
 
 from __future__ import annotations
 
@@ -7,43 +7,44 @@ from typing import Any, Iterable, Mapping
 
 from . import google_api
 from .config import (
-    CONFIRMATION_TOKEN_VERSION,
+    CRUD_CONTRACT_VERSION,
     OPERATION_HASH_VERSION,
     RESOURCE_REGISTRY,
     GscSafetyError,
-    SafetyConfig,
+    ScopeConfig,
     assert_allowed_site,
     assert_allowed_sitemap,
-    assert_mutation_allowed,
     canonical_json,
     canonical_site_url,
     canonical_sitemap_url,
-    load_safety_config,
+    load_scope_config,
     sha256_json,
 )
-from .confirmations import (
-    PROCESS_INSTANCE_ID,
-    assert_not_replayed,
-    issue_confirmation,
-    verify_confirmation,
-)
 
 
-def normalize_operation(raw: Mapping[str, Any], config: SafetyConfig) -> dict[str, Any]:
+def normalize_operation(
+    raw: Mapping[str, Any], config: ScopeConfig
+) -> dict[str, Any]:
     action = str(raw.get("action") or "").strip().lower()
     resource = str(raw.get("resource") or "").strip()
     if resource not in RESOURCE_REGISTRY:
-        raise GscSafetyError("UNSUPPORTED_RESOURCE", f"Unsupported resource: {resource!r}.")
+        raise GscSafetyError(
+            "UNSUPPORTED_RESOURCE", f"Unsupported resource: {resource!r}."
+        )
     if action not in RESOURCE_REGISTRY[resource]["actions"]:
         raise GscSafetyError(
-            "UNSUPPORTED_ACTION", f"Action {action!r} is not supported for {resource}."
+            "UNSUPPORTED_ACTION",
+            f"Action {action!r} is not supported for {resource}.",
         )
     if action in {"get", "list"}:
-        raise GscSafetyError("INVALID_ARGUMENT", "Read actions are not valid batch mutations.")
+        raise GscSafetyError(
+            "INVALID_ARGUMENT", "Read actions are not valid batch mutations."
+        )
 
-    site_url = canonical_site_url(str(raw.get("site_url") or raw.get("resource_name") or ""))
+    site_url = canonical_site_url(
+        str(raw.get("site_url") or raw.get("resource_name") or "")
+    )
     assert_allowed_site(config, site_url)
-    assert_mutation_allowed(config, action, resource)
     operation: dict[str, Any] = {
         "action": action,
         "resource": resource,
@@ -61,29 +62,46 @@ def normalize_operation(raw: Mapping[str, Any], config: SafetyConfig) -> dict[st
         operation["resource_name"] = sitemap_url
         operation["data"] = {"sitemap_url": sitemap_url}
     elif raw.get("data") not in (None, {}):
-        raise GscSafetyError("INVALID_ARGUMENT", "Site operations do not accept data fields.")
+        raise GscSafetyError(
+            "INVALID_ARGUMENT", "Site operations do not accept data fields."
+        )
     return operation
 
 
+def _no_op_reason(operation: Mapping[str, Any], state: Any) -> str | None:
+    if operation["resource"] == "Site" and operation["action"] == "add":
+        return "ALREADY_PRESENT" if state is not None else None
+    if operation["action"] == "delete":
+        return "ALREADY_ABSENT" if state is None else None
+    return None
+
+
 def prepare_operations(
-    raw_operations: Iterable[Mapping[str, Any]], config: SafetyConfig
+    raw_operations: Iterable[Mapping[str, Any]],
+    config: ScopeConfig,
+    client: Any,
 ) -> list[dict[str, Any]]:
     raw_list = list(raw_operations)
     if not raw_list:
-        raise GscSafetyError("INVALID_ARGUMENT", "At least one operation is required.")
+        raise GscSafetyError(
+            "INVALID_ARGUMENT", "At least one operation is required."
+        )
     if len(raw_list) > config.max_operations_per_request:
         raise GscSafetyError(
             "TOO_MANY_OPERATIONS",
             "The request exceeds GSC_MAX_OPERATIONS_PER_REQUEST.",
-            {"requested": len(raw_list), "maximum": config.max_operations_per_request},
+            {
+                "requested": len(raw_list),
+                "maximum": config.max_operations_per_request,
+            },
         )
 
     operations = [normalize_operation(raw, config) for raw in raw_list]
-    client = google_api.service()
     for operation in operations:
         state = google_api.precondition_state(client, operation)
         operation["precondition_state"] = state
         operation["precondition_hash"] = sha256_json(state)
+        operation["no_op_reason"] = _no_op_reason(operation, state)
     return operations
 
 
@@ -104,10 +122,6 @@ def operation_hash(operations: list[dict[str, Any]]) -> str:
     return hashlib.sha256(canonical_json(value)).hexdigest()[:32]
 
 
-def preconditions_hash(operations: list[dict[str, Any]]) -> str:
-    return sha256_json([item["precondition_hash"] for item in operations])
-
-
 def public_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
@@ -117,12 +131,13 @@ def public_operations(operations: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "resource_name": item["resource_name"],
             "data": item["data"],
             "precondition_hash": item["precondition_hash"],
+            "no_op_reason": item["no_op_reason"],
         }
         for item in operations
     ]
 
 
-def scope(operations: list[dict[str, Any]]) -> dict[str, Any]:
+def operation_scope(operations: list[dict[str, Any]]) -> dict[str, Any]:
     actions: dict[str, int] = {}
     resources: dict[str, int] = {}
     for item in operations:
@@ -131,175 +146,167 @@ def scope(operations: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "actions": actions,
         "resources": resources,
-        "requested_resource_names": [item["resource_name"] for item in operations],
-        "contains_delete": any(item["action"] == "delete" for item in operations),
-        "atomic": False,
-        "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
+        "site_urls": sorted({item["site_url"] for item in operations}),
+        "requested_resource_names": [
+            item["resource_name"] for item in operations
+        ],
     }
 
 
-def refresh_preconditions(operations: list[dict[str, Any]]) -> None:
-    client = google_api.service()
-    for operation in operations:
-        current = google_api.precondition_state(client, operation)
-        current_hash = sha256_json(current)
-        if current_hash != operation["precondition_hash"]:
-            raise GscSafetyError(
-                "PRECONDITION_CHANGED",
-                "The resource changed after preflight; generate a new preflight.",
-                {
-                    "resource": operation["resource"],
-                    "resource_name": operation["resource_name"],
-                    "expected_precondition_hash": operation["precondition_hash"],
-                    "current_precondition_hash": current_hash,
-                },
-            )
+def _failure(exc: Exception, operation_index: int) -> dict[str, Any]:
+    status = google_api.http_status(exc)
+    retryable = status is None or status == 429 or status >= 500
+    return {
+        "operation_index": operation_index,
+        "code": getattr(exc, "code", type(exc).__name__),
+        "message": str(exc),
+        "details": {"http_status": status},
+        "retryable": retryable,
+        "execution_may_have_completed": retryable,
+    }
 
 
 def coordinate(
     raw_operations: Iterable[Mapping[str, Any]],
     *,
-    validate_only: bool,
-    confirmation: str | None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    if not validate_only and confirmation:
-        assert_not_replayed(confirmation)
+    """Execute a direct, scope-limited, sequential GSC mutation batch."""
 
-    config = load_safety_config()
-    operations = prepare_operations(raw_operations, config)
+    config = load_scope_config()
+    client = google_api.service()
+    operations = prepare_operations(raw_operations, config, client)
     op_hash = operation_hash(operations)
-    pph = preconditions_hash(operations)
-    operation_scope = scope(operations)
-    site_urls = [item["site_url"] for item in operations]
+    scope = operation_scope(operations)
 
-    if validate_only:
-        approval_code, expires, confirmation_key_id = issue_confirmation(
-            config, op_hash, pph, site_urls
-        )
+    if dry_run:
         return {
+            "contract_version": CRUD_CONTRACT_VERSION,
             "runtime": "PYTHON_FASTMCP_HORIZON",
-            "mode": "VALIDATE_ONLY",
-            "validation_kind": "CONNECTOR_PREFLIGHT",
-            "admin_api_validate_only_supported": False,
-            "validation_status": "PASSED",
-            "validated": True,
-            "validated_in_current_call": True,
-            "execution_attempted": False,
-            "executed": False,
+            "mode": "DRY_RUN",
             "execution_status": "NOT_EXECUTED",
+            "execution_attempted": False,
+            "atomic": False,
+            "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
             "operation_count": len(operations),
-            "normalized_operations": public_operations(operations),
-            "operation_scope": operation_scope,
-            "confirmation_expires_at": expires.isoformat(),
+            "operations": public_operations(operations),
+            "operation_scope": scope,
+            "operation_hash": op_hash,
+            "operation_hash_version": OPERATION_HASH_VERSION,
+            "results": [],
             "verification": {
                 "request_shapes_built": True,
                 "precondition_reads_performed": True,
                 "allowlists_verified": True,
                 "google_api_mutation_sent": False,
-                "post_mutation_read_performed": False,
-            },
-            "operation_hash": op_hash,
-            "operation_hash_version": OPERATION_HASH_VERSION,
-            "confirmation_token_version": CONFIRMATION_TOKEN_VERSION,
-            "confirmation_format": "SHORT_HMAC_APPROVAL_CODE",
-            "confirmation_key_id": confirmation_key_id,
-            "confirmation_issued_by_process_instance_id": PROCESS_INSTANCE_ID,
-            "required_approval_code": approval_code,
-            "validation_receipt": {
-                "confirmation_key_id": confirmation_key_id,
-                "issued_by_process_instance_id": PROCESS_INSTANCE_ID,
-                "cross_instance_valid": True,
-                "cross_instance_requirement": "MATCHING_CONFIRMATION_KEY_ID",
-                "replay_protection": "BEST_EFFORT_PROCESS_LOCAL",
-                "globally_single_use": False,
-                "expires_at": expires.isoformat(),
-                "format": "SHORT_HMAC_APPROVAL_CODE",
+                "post_mutation_reads_performed": False,
             },
         }
 
-    verified = verify_confirmation(config, confirmation or "", op_hash, pph, site_urls)
-    refresh_preconditions(operations)
-    client = google_api.service()
     results: list[dict[str, Any]] = []
     execution_failure: dict[str, Any] | None = None
+    mutation_attempts = 0
+    verification_reads = 0
 
     for index, operation in enumerate(operations):
+        no_op_reason = operation["no_op_reason"]
+        if no_op_reason:
+            results.append(
+                {
+                    "operation_index": index,
+                    "action": operation["action"],
+                    "resource": operation["resource"],
+                    "site_url": operation["site_url"],
+                    "resource_name": operation["resource_name"],
+                    "execution_status": "SUCCEEDED",
+                    "outcome": no_op_reason,
+                    "response": None,
+                    "post_execution_observation": operation[
+                        "precondition_state"
+                    ],
+                    "post_execution_verification_status": "VERIFIED",
+                }
+            )
+            continue
+
         try:
+            mutation_attempts += 1
             response = google_api.execute(client, operation)
-            verification_status, observation = google_api.verify(client, operation)
+            verification_reads += 1
+            verification_status, observation = google_api.verify(
+                client, operation
+            )
             result = {
+                "operation_index": index,
                 "action": operation["action"],
                 "resource": operation["resource"],
                 "site_url": operation["site_url"],
                 "resource_name": operation["resource_name"],
+                "execution_status": (
+                    "SUCCEEDED"
+                    if verification_status == "VERIFIED"
+                    else "FAILED"
+                ),
+                "outcome": "MUTATED",
                 "response": response,
                 "post_execution_observation": observation,
                 "post_execution_verification_status": verification_status,
-                "operation_index": index,
-                "execution_status": "SUCCEEDED" if verification_status == "VERIFIED" else "FAILED",
             }
             results.append(result)
             if verification_status != "VERIFIED":
                 execution_failure = {
                     "operation_index": index,
                     "code": "POST_EXECUTION_VERIFICATION_FAILED",
-                    "message": "The API call returned but verification did not match.",
+                    "message": (
+                        "The API call returned but verification did not match."
+                    ),
+                    "details": {},
+                    "retryable": False,
+                    "execution_may_have_completed": True,
                 }
                 break
         except Exception as exc:
-            execution_failure = {
-                "operation_index": index,
-                "code": getattr(exc, "code", type(exc).__name__),
-                "message": str(exc),
-            }
+            execution_failure = _failure(exc, index)
             results.append(
                 {
+                    "operation_index": index,
                     "action": operation["action"],
                     "resource": operation["resource"],
                     "site_url": operation["site_url"],
                     "resource_name": operation["resource_name"],
-                    "operation_index": index,
-                    "execution_status": "FAILED",
+                    "execution_status": (
+                        "UNKNOWN"
+                        if execution_failure["execution_may_have_completed"]
+                        else "FAILED"
+                    ),
                     "error": execution_failure,
                 }
             )
             break
 
-    completed = sum(1 for item in results if item["execution_status"] == "SUCCEEDED")
-    attempted = len(results)
+    completed = sum(item["execution_status"] == "SUCCEEDED" for item in results)
     all_verified = execution_failure is None and completed == len(operations)
     return {
+        "contract_version": CRUD_CONTRACT_VERSION,
         "runtime": "PYTHON_FASTMCP_HORIZON",
         "mode": "EXECUTE",
-        "validation_status": "PRIOR_VALIDATION_VERIFIED",
-        "execution_attempted": attempted > 0,
-        "executed": completed > 0,
         "execution_status": "SUCCEEDED" if all_verified else "FAILED",
+        "execution_attempted": mutation_attempts > 0,
         "atomic": False,
         "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
         "operation_count": len(operations),
-        "operations_attempted": attempted,
+        "operations_attempted": len(results),
         "operations_completed": completed,
-        "operations_not_attempted": len(operations) - attempted,
+        "operations_not_attempted": len(operations) - len(results),
         "results": results,
-        "execution_failure": execution_failure,
-        "operation_scope": operation_scope,
-        "verification": {
-            "post_execution_reads_performed": attempted > 0,
-            "all_requested_resources_verified": all_verified,
-            "verification_failure_count": 0 if all_verified else 1,
-            "claims_limited_to_requested_resources": True,
-        },
-        "confirmation_verified": True,
-        "approval_code_verified": True,
-        "confirmation_registered_before_api_call": True,
-        "approval_code_fingerprint": verified.token_fingerprint,
-        "confirmation_token_version": CONFIRMATION_TOKEN_VERSION,
-        "confirmation_format": "SHORT_HMAC_APPROVAL_CODE",
-        "confirmation_key_id": verified.key_id,
-        "confirmation_key_source": verified.key_source,
-        "confirmation_issued_by_process_instance_id": verified.issued_by_process_instance_id,
-        "confirmation_verified_by_process_instance_id": PROCESS_INSTANCE_ID,
+        "error": execution_failure,
+        "operation_scope": scope,
         "operation_hash": op_hash,
         "operation_hash_version": OPERATION_HASH_VERSION,
+        "verification": {
+            "precondition_reads_performed": True,
+            "post_mutation_reads_performed": verification_reads > 0,
+            "all_requested_resources_verified": all_verified,
+            "verification_failure_count": 0 if all_verified else 1,
+        },
     }

@@ -1,174 +1,61 @@
-# Google Search Console protected CRUD
+# Direct Google Search Console CRUD
 
-## Exact API surface
+The Prefect Horizon server exposes `direct-crud-v1`. Mutations run in one tool
+call and never require a prepare step, approval code, confirmation secret, or
+action gate.
 
-Search Console does not expose a generic update operation. This facade uses the
-API's real verbs instead of inventing conventional CRUD semantics.
+## Public tools
 
-| Resource | Read | Create-like | Delete | Unsupported |
-|---|---|---|---|---|
-| `Site` | `get`, `list` | `add` | `delete` | `update`, `archive`, `restore` |
-| `Sitemap` | `get`, `list` | `submit` | `delete` | `update`, `archive`, `restore` |
-| `SearchAnalytics` | `query` | — | — | all writes |
-| `URLInspection` | `inspect` | — | — | all writes |
+Read and discovery:
 
-Legacy direct mutation tools are intentionally not registered by
-`horizon_server.py`. The generic Python facade also remains internal and is not
-published in the Horizon tool catalog.
+- `gsc_crud_status`
+- `gsc_list_mutable_resources`
+- `gsc_get_mutation_schema`
+- `gsc_get_resource`
+- `gsc_list_resources`
 
-Managed deployments expose dedicated, fixed-schema tools:
+Direct writes:
 
-| Action | Read-only preflight | Confirmed execution |
-|---|---|---|
-| `Site.add` | `gsc_prepare_site_add` | `gsc_execute_site_add` |
-| `Site.delete` | `gsc_prepare_site_delete` | `gsc_execute_site_delete` |
-| `Sitemap.submit` | `gsc_prepare_sitemap_submit` | `gsc_execute_sitemap_submit` |
-| `Sitemap.delete` | `gsc_prepare_sitemap_delete` | `gsc_execute_sitemap_delete` |
-
-The Horizon catalog does **not** expose:
-
-- `gsc_create_resource`
-- `gsc_delete_resource`
+- `gsc_add_site`
+- `gsc_delete_site`
+- `gsc_submit_sitemap`
+- `gsc_delete_sitemap`
 - `gsc_batch_operations`
-- `add_site`
-- `delete_site`
-- `manage_sitemaps`
 
-This separation prevents a preflight from being classified as a generic write
-tool and prevents callers from selecting `resource`, `action`, `data`, or
-`validate_only` dynamically.
+Every write accepts optional `dry_run=false`. A dry run performs canonical
+input checks, allowlist checks, and API precondition reads without sending a
+mutation.
 
-## Short approval codes
+Search Console exposes add/get/list/delete for Sites and
+submit/get/list/delete for Sitemaps. It does not expose update, archive, or
+restore operations.
 
-Prepare tools return `required_approval_code`. Execute tools accept only the
-corresponding `approval_code` plus the fixed resource arguments.
+Delete tools are idempotent. Deleting an already absent Site or Sitemap returns
+success with `ALREADY_ABSENT`.
 
-The code format is deliberately compact and non-JWT-like:
-
-```text
-GSC3-<key-id>-<expiry>-<nonce>-<truncated-hmac>
-```
-
-The code contains no credential or HMAC secret. Its HMAC is bound to:
-
-- operation hash;
-- full precondition hash;
-- allowlisted site URLs;
-- expiration;
-- nonce;
-- signing-key fingerprint.
-
-The execute tool recalculates the operation and current preconditions before
-verifying the code. Codes remain valid across replicas that share the same
-current signing key. Replay registration remains process-local and therefore is
-not globally single-use across replicas.
-
-## MCP annotations
-
-All Horizon tools declare the complete standard annotation set.
-
-Preflight tools:
+## Required Horizon configuration
 
 ```text
-readOnlyHint: true
-destructiveHint: false
-idempotentHint: true
-openWorldHint: false
-```
-
-Additive execution tools (`Site.add`, `Sitemap.submit`):
-
-```text
-readOnlyHint: false
-destructiveHint: false
-idempotentHint: true
-openWorldHint: false
-```
-
-Delete execution tools:
-
-```text
-readOnlyHint: false
-destructiveHint: true
-idempotentHint: true
-openWorldHint: false
-```
-
-`openWorldHint=false` reflects that mutable operations are constrained to the
-configured exact site allowlist and sitemap prefix allowlist. Annotations are
-hints only; the connector still enforces all gates, allowlists, approval codes,
-preconditions, replay checks, and post-execution verification.
-
-## Safety sequence
-
-1. Call the matching `gsc_prepare_*` tool.
-2. Read current resource state.
-3. Validate action gate, exact site allowlist and sitemap prefix allowlist.
-4. Build a deterministic operation payload and precondition hashes.
-5. Return a local `CONNECTOR_PREFLIGHT` result with a short HMAC approval code.
-6. Call the matching `gsc_execute_*` tool with the same fixed arguments and the
-   exact `approval_code`.
-7. Verify code version, key ID, signature, TTL, operation hash and preconditions.
-8. Register process-local replay state before the Google API call.
-9. Execute the single requested operation.
-10. Read the requested resource again and report verification evidence.
-
-The Search Console API has no native dry-run endpoint for these operations.
-The `gsc_prepare_*` tools perform connector-side preflight only and cannot
-execute a mutation. The `gsc_execute_*` tools do not expose a `validate_only`
-switch and reject a missing approval code before making an API read.
-
-## Required environment variables
-
-```env
-GSC_ADMIN_MUTATIONS_ENABLED=false
-GSC_ALLOW_SITE_ADD=false
-GSC_ALLOW_SITE_DELETE=false
-GSC_ALLOW_SITEMAP_SUBMIT=false
-GSC_ALLOW_SITEMAP_DELETE=false
-
-GSC_ALLOWED_SITE_URLS=sc-domain:example.com
-GSC_ALLOWED_SITEMAP_PREFIXES=https://www.example.com/
-
-GSC_MAX_OPERATIONS_PER_REQUEST=10
-GSC_CONFIRMATION_TTL_SECONDS=900
-GSC_CONFIRMATION_SECRET=<at-least-32-strong-bytes>
-```
-
-For managed deployments, credentials may be supplied as:
-
-```env
 GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64=<base64-service-account-json>
+GSC_ALLOWED_SITE_URLS=sc-domain:example.com,https://staging.example.com/
+GSC_ALLOWED_SITEMAP_PREFIXES=https://www.example.com/,https://staging.example.com/
+GSC_MAX_OPERATIONS_PER_REQUEST=10
 ```
 
-The Horizon entrypoint materializes this value with mode `0600`, sets
-`GSC_CREDENTIALS_PATH`, and defaults `GSC_SKIP_OAUTH=true`.
+The old `GSC_ADMIN_MUTATIONS_ENABLED`, `GSC_ALLOW_*`, and
+`GSC_CONFIRMATION_*` variables are ignored and should be removed.
 
-## Optional key rotation
+## ChatGPT workspace actions
 
-During a controlled rotation only:
+After deploying a changed tool catalog, refresh the custom app in ChatGPT
+Workspace Settings, enable all five direct write actions, and configure the
+desired per-app approval mode. Search Console delete actions remain truthfully
+annotated as destructive and idempotent; client workspace policy is configured
+in ChatGPT rather than bypassed inside the MCP server.
 
-```env
-GSC_CONFIRMATION_PREVIOUS_SECRET=<old-secret>
-```
+## Execution behavior
 
-Remove it after all pre-rotation approval codes have expired. Diagnostics expose
-only non-secret key fingerprints.
-
-## Operational properties
-
-```text
-operation_hash_version: 3
-confirmation_token_version: 3
-confirmation_format: SHORT_HMAC_APPROVAL_CODE
-cross_instance_valid: true with matching key ID
-replay_protection: BEST_EFFORT_PROCESS_LOCAL
-globally_single_use: false
-atomic: false
-execution_strategy: SEQUENTIAL_STOP_ON_FIRST_ERROR
-validation_kind: CONNECTOR_PREFLIGHT
-```
-
-All replicas must use the same current confirmation secret. For globally
-single-use approval codes, replace the process-local replay set with shared
-durable storage before horizontally scaling mutation traffic.
+Batches are non-atomic and stop on the first failed or uncertain operation.
+Each successful mutation is followed by a read that verifies the requested
+resource is present or absent. Transport errors report whether execution may
+have completed so callers do not retry uncertain writes blindly.

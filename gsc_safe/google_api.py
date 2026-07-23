@@ -1,4 +1,4 @@
-"""Minimal Google Search Console API adapter used by the protected facade."""
+"""Minimal Google Search Console API adapter used by direct CRUD."""
 
 from __future__ import annotations
 
@@ -19,10 +19,15 @@ def http_status(exc: BaseException) -> int | None:
     return getattr(getattr(exc, "resp", None), "status", None)
 
 
-def read_site(client: Any, site_url: str, *, allow_missing: bool) -> dict[str, Any] | None:
+def read_site(
+    client: Any, site_url: str, *, allow_missing: bool
+) -> dict[str, Any] | None:
     try:
         response = client.sites().get(siteUrl=site_url).execute()
-        return {"site_url": site_url, "permission_level": response.get("permissionLevel")}
+        return {
+            "site_url": site_url,
+            "permission_level": response.get("permissionLevel"),
+        }
     except HttpError as exc:
         if allow_missing and http_status(exc) == 404:
             return None
@@ -32,7 +37,10 @@ def read_site(client: Any, site_url: str, *, allow_missing: bool) -> dict[str, A
 def list_sites(client: Any) -> list[dict[str, Any]]:
     response = client.sites().list().execute()
     return [
-        {"site_url": item.get("siteUrl"), "permission_level": item.get("permissionLevel")}
+        {
+            "site_url": item.get("siteUrl"),
+            "permission_level": item.get("permissionLevel"),
+        }
         for item in response.get("siteEntry", [])
     ]
 
@@ -41,7 +49,11 @@ def read_sitemap(
     client: Any, site_url: str, sitemap_url: str, *, allow_missing: bool
 ) -> dict[str, Any] | None:
     try:
-        response = client.sitemaps().get(siteUrl=site_url, feedpath=sitemap_url).execute()
+        response = (
+            client.sitemaps()
+            .get(siteUrl=site_url, feedpath=sitemap_url)
+            .execute()
+        )
         return {
             "site_url": site_url,
             "sitemap_url": response.get("path", sitemap_url),
@@ -73,21 +85,18 @@ def list_sitemaps(client: Any, site_url: str) -> list[dict[str, Any]]:
     ]
 
 
-def precondition_state(client: Any, operation: Mapping[str, Any]) -> dict[str, Any] | None:
+def precondition_state(
+    client: Any, operation: Mapping[str, Any]
+) -> dict[str, Any] | None:
     if operation["resource"] == "Site":
-        state = read_site(client, operation["site_url"], allow_missing=True)
-        if operation["action"] == "add" and state is not None:
-            raise GscSafetyError("RESOURCE_ALREADY_EXISTS", "The Site is already present.")
-        if operation["action"] == "delete" and state is None:
-            raise GscSafetyError("RESOURCE_NOT_FOUND", "The Site does not exist.")
-        return state
+        return read_site(client, operation["site_url"], allow_missing=True)
 
-    state = read_sitemap(
-        client, operation["site_url"], operation["resource_name"], allow_missing=True
+    return read_sitemap(
+        client,
+        operation["site_url"],
+        operation["resource_name"],
+        allow_missing=True,
     )
-    if operation["action"] == "delete" and state is None:
-        raise GscSafetyError("RESOURCE_NOT_FOUND", "The Sitemap does not exist.")
-    return state
 
 
 def execute(client: Any, operation: Mapping[str, Any]) -> Any:
@@ -97,22 +106,46 @@ def execute(client: Any, operation: Mapping[str, Any]) -> Any:
     if resource == "Site" and action == "delete":
         return client.sites().delete(siteUrl=operation["site_url"]).execute()
     if resource == "Sitemap" and action == "submit":
-        return client.sitemaps().submit(
-            siteUrl=operation["site_url"], feedpath=operation["resource_name"]
-        ).execute()
+        return (
+            client.sitemaps()
+            .submit(
+                siteUrl=operation["site_url"],
+                feedpath=operation["resource_name"],
+            )
+            .execute()
+        )
     if resource == "Sitemap" and action == "delete":
-        return client.sitemaps().delete(
-            siteUrl=operation["site_url"], feedpath=operation["resource_name"]
-        ).execute()
-    raise GscSafetyError("UNSUPPORTED_ACTION", "Unsupported operation reached execution.")
+        return (
+            client.sitemaps()
+            .delete(
+                siteUrl=operation["site_url"],
+                feedpath=operation["resource_name"],
+            )
+            .execute()
+        )
+    raise GscSafetyError(
+        "UNSUPPORTED_ACTION", "Unsupported operation reached execution."
+    )
 
 
 def verify(client: Any, operation: Mapping[str, Any]) -> tuple[str, Any]:
     if operation["resource"] == "Site":
-        observation = read_site(client, operation["site_url"], allow_missing=True)
+        observation = read_site(
+            client, operation["site_url"], allow_missing=True
+        )
     else:
         observation = read_sitemap(
-            client, operation["site_url"], operation["resource_name"], allow_missing=True
+            client,
+            operation["site_url"],
+            operation["resource_name"],
+            allow_missing=True,
         )
     expected_present = operation["action"] in {"add", "submit"}
-    return ("VERIFIED" if (observation is not None) == expected_present else "FAILED", observation)
+    return (
+        (
+            "VERIFIED"
+            if (observation is not None) == expected_present
+            else "FAILED"
+        ),
+        observation,
+    )

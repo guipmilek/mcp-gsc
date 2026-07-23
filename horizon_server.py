@@ -1,4 +1,4 @@
-"""FastMCP/Horizon entrypoint with protected Google Search Console writes."""
+"""FastMCP/Horizon entrypoint with direct Google Search Console CRUD."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ from typing import Any, Awaitable, Callable
 
 
 def _configure_credentials_from_base64() -> Path | None:
-    encoded = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64", "").strip()
+    encoded = os.getenv(
+        "GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64", ""
+    ).strip()
     if not encoded:
         return None
     try:
@@ -25,7 +27,9 @@ def _configure_credentials_from_base64() -> Path | None:
     if not isinstance(parsed, dict):
         raise RuntimeError("Decoded Google credentials must be a JSON object.")
 
-    path = Path(os.getenv("GSC_ADC_PATH", "/tmp/google-search-console-adc.json"))
+    path = Path(
+        os.getenv("GSC_ADC_PATH", "/tmp/google-search-console-adc.json")
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_bytes(raw)
@@ -47,20 +51,16 @@ from mcp.types import ToolAnnotations  # noqa: E402
 import gsc_server as legacy  # noqa: E402
 from gsc_safe import (  # noqa: E402
     GscSafetyError,
-    gsc_confirmation_diagnostics,
-    gsc_execute_site_add,
-    gsc_execute_site_delete,
-    gsc_execute_sitemap_delete,
-    gsc_execute_sitemap_submit,
+    gsc_add_site,
+    gsc_batch_operations,
+    gsc_crud_status,
+    gsc_delete_site,
+    gsc_delete_sitemap,
     gsc_get_mutation_schema,
     gsc_get_resource,
     gsc_list_mutable_resources,
     gsc_list_resources,
-    gsc_prepare_site_add,
-    gsc_prepare_site_delete,
-    gsc_prepare_sitemap_delete,
-    gsc_prepare_sitemap_submit,
-    gsc_safety_status,
+    gsc_submit_sitemap,
 )
 
 ToolFunction = Callable[..., Awaitable[Any]]
@@ -69,44 +69,61 @@ ToolDefinition = tuple[ToolFunction, str]
 _READ_TOOLS: tuple[ToolDefinition, ...] = tuple(
     (function, title)
     for function, title in (
-        (getattr(legacy, "list_properties", None), "List Search Console Properties"),
-        (getattr(legacy, "get_site_details", None), "Get Search Console Site Details"),
+        (
+            getattr(legacy, "list_properties", None),
+            "List Search Console Properties",
+        ),
+        (
+            getattr(legacy, "get_site_details", None),
+            "Get Search Console Site Details",
+        ),
         (getattr(legacy, "get_search_analytics", None), "Get Search Analytics"),
-        (getattr(legacy, "get_performance_overview", None), "Get Performance Overview"),
-        (getattr(legacy, "compare_search_periods", None), "Compare Search Periods"),
-        (getattr(legacy, "get_search_by_page_query", None), "Get Search by Page and Query"),
-        (getattr(legacy, "get_advanced_search_analytics", None), "Get Advanced Search Analytics"),
+        (
+            getattr(legacy, "get_performance_overview", None),
+            "Get Performance Overview",
+        ),
+        (
+            getattr(legacy, "compare_search_periods", None),
+            "Compare Search Periods",
+        ),
+        (
+            getattr(legacy, "get_search_by_page_query", None),
+            "Get Search by Page and Query",
+        ),
+        (
+            getattr(legacy, "get_advanced_search_analytics", None),
+            "Get Advanced Search Analytics",
+        ),
         (getattr(legacy, "inspect_url_enhanced", None), "Inspect URL"),
         (getattr(legacy, "batch_url_inspection", None), "Batch URL Inspection"),
-        (getattr(legacy, "check_indexing_issues", None), "Check Indexing Issues"),
+        (
+            getattr(legacy, "check_indexing_issues", None),
+            "Check Indexing Issues",
+        ),
         (getattr(legacy, "get_sitemaps", None), "Get Sitemaps"),
-        (getattr(legacy, "list_sitemaps_enhanced", None), "List Sitemaps Enhanced"),
+        (
+            getattr(legacy, "list_sitemaps_enhanced", None),
+            "List Sitemaps Enhanced",
+        ),
         (getattr(legacy, "get_sitemap_details", None), "Get Sitemap Details"),
-        (gsc_safety_status, "Get GSC Safety Status"),
-        (gsc_confirmation_diagnostics, "Run GSC Confirmation Diagnostics"),
+        (gsc_crud_status, "Get GSC Direct CRUD Status"),
         (gsc_list_mutable_resources, "List GSC Mutable Resources"),
         (gsc_get_mutation_schema, "Get GSC Mutation Schema"),
-        (gsc_get_resource, "Get Allowlisted GSC Resource"),
-        (gsc_list_resources, "List Allowlisted GSC Resources"),
+        (gsc_get_resource, "Get GSC Resource"),
+        (gsc_list_resources, "List GSC Resources"),
     )
     if function is not None
 )
 
-_PREPARE_TOOLS: tuple[ToolDefinition, ...] = (
-    (gsc_prepare_site_add, "Prepare Search Console Site Add"),
-    (gsc_prepare_site_delete, "Prepare Search Console Site Delete"),
-    (gsc_prepare_sitemap_submit, "Prepare Search Console Sitemap Submit"),
-    (gsc_prepare_sitemap_delete, "Prepare Search Console Sitemap Delete"),
-)
-
 _ADDITIVE_WRITE_TOOLS: tuple[ToolDefinition, ...] = (
-    (gsc_execute_site_add, "Execute Search Console Site Add"),
-    (gsc_execute_sitemap_submit, "Execute Search Console Sitemap Submit"),
+    (gsc_add_site, "Add Search Console Site"),
+    (gsc_submit_sitemap, "Submit Search Console Sitemap"),
 )
 
 _DESTRUCTIVE_WRITE_TOOLS: tuple[ToolDefinition, ...] = (
-    (gsc_execute_site_delete, "Execute Search Console Site Delete"),
-    (gsc_execute_sitemap_delete, "Execute Search Console Sitemap Delete"),
+    (gsc_delete_site, "Delete Search Console Site"),
+    (gsc_delete_sitemap, "Delete Search Console Sitemap"),
+    (gsc_batch_operations, "Run Search Console CRUD Batch"),
 )
 
 
@@ -177,16 +194,6 @@ def create_horizon_server() -> FastMCP:
             idempotent=True,
             open_world=True,
         )
-    for function, title in _PREPARE_TOOLS:
-        _add_tool(
-            server,
-            function,
-            title,
-            read_only=True,
-            destructive=False,
-            idempotent=True,
-            open_world=False,
-        )
     for function, title in _ADDITIVE_WRITE_TOOLS:
         _add_tool(
             server,
@@ -195,7 +202,7 @@ def create_horizon_server() -> FastMCP:
             read_only=False,
             destructive=False,
             idempotent=True,
-            open_world=False,
+            open_world=True,
         )
     for function, title in _DESTRUCTIVE_WRITE_TOOLS:
         _add_tool(
@@ -205,7 +212,7 @@ def create_horizon_server() -> FastMCP:
             read_only=False,
             destructive=True,
             idempotent=True,
-            open_world=False,
+            open_world=True,
         )
     return server
 

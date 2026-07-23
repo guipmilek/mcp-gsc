@@ -1,5 +1,12 @@
 # Google Search Console MCP Server for SEOs
 
+> **Prefect Horizon deployment:** `horizon_server.py:mcp` uses the
+> `direct-crud-v1` contract documented in [GSC_CRUD.md](GSC_CRUD.md). Its
+> create and delete tools execute in one call with optional `dry_run`; it does
+> not use `GSC_ALLOW_DESTRUCTIVE`, confirmation tokens, or approval gates.
+> After redeploying, refresh and enable the app actions in ChatGPT workspace
+> Action control.
+
 A Model Context Protocol (MCP) server that connects [Google Search Console](https://search.google.com/search-console/about) (GSC) to AI assistants, allowing you to analyze your SEO data through natural language conversations. Works with **Claude Desktop**, **Cursor**, **Codex CLI**, **Gemini CLI**, **Antigravity**, and any other MCP-compatible client.
 
 > **Skip setup, get more.** A more advanced hosted version — one-click sign-in, added GA4 tools. Works with Claude Desktop, Claude Code, Claude.ai, Codex, Cursor, and any MCP client. Only **100 seats**.
@@ -315,7 +322,7 @@ If you see your properties — it's working. If not, ask: **"Call get_capabiliti
 | `GSC_CREDENTIALS_PATH` | Service account only | — | Absolute path to your service account JSON key. Always required when using `uvx`. |
 | `GSC_SKIP_OAUTH` | No | `false` | Set to `"true"` to force service account auth and skip OAuth entirely |
 | `GSC_DATA_STATE` | No | `"all"` | `"all"` matches the GSC dashboard. `"final"` returns only confirmed data (2–3 day lag). |
-| `GSC_ALLOW_DESTRUCTIVE` | No | `false` | Set to `"true"` to enable add/delete site and delete sitemap tools |
+| `GSC_ALLOW_DESTRUCTIVE` | Legacy stdio only | `false` | Applies only to `gsc_server.py`; Horizon direct CRUD ignores it |
 
 ---
 
@@ -402,9 +409,14 @@ The MCP server runs locally on your machine. It only works in the **Claude Deskt
 
 ---
 
-## Safety: Destructive Operations
+## Legacy stdio safety: destructive operations
 
-By default, `add_site`, `delete_site`, and `delete_sitemap` are disabled. To enable them:
+This section applies only to the legacy `gsc_server.py` runtime. The Prefect
+Horizon entrypoint uses allowlists plus ChatGPT Action control and has no
+connector action gate.
+
+In the legacy stdio runtime, `add_site`, `delete_site`, and `delete_sitemap`
+are disabled by default. To enable them:
 
 ```json
 "GSC_ALLOW_DESTRUCTIVE": "true"
