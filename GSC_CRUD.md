@@ -13,26 +13,85 @@ API's real verbs instead of inventing conventional CRUD semantics.
 | `URLInspection` | `inspect` | — | — | all writes |
 
 Legacy direct mutation tools are intentionally not registered by
-`horizon_server.py`. Managed deployments must use:
+`horizon_server.py`. The generic Python facade also remains internal and is not
+published in the Horizon tool catalog.
+
+Managed deployments expose dedicated, fixed-schema tools:
+
+| Action | Read-only preflight | Confirmed execution |
+|---|---|---|
+| `Site.add` | `gsc_prepare_site_add` | `gsc_execute_site_add` |
+| `Site.delete` | `gsc_prepare_site_delete` | `gsc_execute_site_delete` |
+| `Sitemap.submit` | `gsc_prepare_sitemap_submit` | `gsc_execute_sitemap_submit` |
+| `Sitemap.delete` | `gsc_prepare_sitemap_delete` | `gsc_execute_sitemap_delete` |
+
+The Horizon catalog does **not** expose:
 
 - `gsc_create_resource`
 - `gsc_delete_resource`
 - `gsc_batch_operations`
+- `add_site`
+- `delete_site`
+- `manage_sitemaps`
+
+This separation prevents a preflight from being classified as a generic write
+tool and prevents callers from selecting `resource`, `action`, `data`, or
+`validate_only` dynamically.
+
+## MCP annotations
+
+All Horizon tools declare the complete standard annotation set.
+
+Preflight tools:
+
+```text
+readOnlyHint: true
+destructiveHint: false
+idempotentHint: true
+openWorldHint: false
+```
+
+Additive execution tools (`Site.add`, `Sitemap.submit`):
+
+```text
+readOnlyHint: false
+destructiveHint: false
+idempotentHint: true
+openWorldHint: false
+```
+
+Delete execution tools:
+
+```text
+readOnlyHint: false
+destructiveHint: true
+idempotentHint: true
+openWorldHint: false
+```
+
+`openWorldHint=false` reflects that mutable operations are constrained to the
+configured exact site allowlist and sitemap prefix allowlist. Annotations are
+hints only; the connector still enforces all gates, allowlists, confirmations,
+preconditions, replay checks, and post-execution verification.
 
 ## Safety sequence
 
-1. Read current resource state.
-2. Validate resource, action, gate, site allowlist and sitemap prefix allowlist.
-3. Build a deterministic operation payload and precondition hashes.
-4. Return a local `CONNECTOR_PREFLIGHT` receipt with an HMAC confirmation.
-5. Require a second call with `validate_only=false` and the exact receipt.
-6. Verify token version, key ID, signature, TTL, operation hash and preconditions.
-7. Register process-local replay state before the Google API call.
-8. Execute sequentially and stop after the first failure.
-9. Read requested resources again and report verification evidence.
+1. Call the matching `gsc_prepare_*` tool.
+2. Read current resource state.
+3. Validate action gate, exact site allowlist and sitemap prefix allowlist.
+4. Build a deterministic operation payload and precondition hashes.
+5. Return a local `CONNECTOR_PREFLIGHT` receipt with an HMAC confirmation.
+6. Call the matching `gsc_execute_*` tool with the same fixed arguments and the
+   exact receipt.
+7. Verify token version, key ID, signature, TTL, operation hash and preconditions.
+8. Register process-local replay state before the Google API call.
+9. Execute the single requested operation.
+10. Read the requested resource again and report verification evidence.
 
 The Search Console API has no native dry-run endpoint for these operations.
-`validate_only=true` means connector-side preflight only.
+The `gsc_prepare_*` tools perform connector-side preflight only and cannot
+execute a mutation. The `gsc_execute_*` tools do not expose a `validate_only`
+switch and reject a missing confirmation before making an API read.
 
 ## Required environment variables
 
