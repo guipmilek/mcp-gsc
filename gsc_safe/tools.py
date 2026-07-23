@@ -28,6 +28,8 @@ async def gsc_crud_status() -> dict[str, Any]:
         "runtime": "PYTHON_FASTMCP_HORIZON",
         "write_mode": "DIRECT",
         "deployment_env_keys": ["MCP_CREDENTIALS", "MCP_CONFIG"],
+        "optional_deployment_env_keys": ["MCP_CONFIG"],
+        "empty_allowlist_behavior": "ALLOW_ALL_ACCESSIBLE",
         "dry_run_supported": True,
         "approval_workflow": False,
         "allowlists": {

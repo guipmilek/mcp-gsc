@@ -226,9 +226,7 @@ def sha256_json(value: Any) -> str:
 
 
 def assert_allowed_site(config: ScopeConfig, site_url: str) -> None:
-    if not config.allowed_site_urls:
-        raise GscSafetyError("EMPTY_ALLOWLIST", "MCP_CONFIG.sites is empty.")
-    if site_url not in config.allowed_site_urls:
+    if config.allowed_site_urls and site_url not in config.allowed_site_urls:
         raise GscSafetyError(
             "SITE_NOT_ALLOWED",
             "The requested Search Console property is outside the allowlist.",
@@ -237,9 +235,7 @@ def assert_allowed_site(config: ScopeConfig, site_url: str) -> None:
 
 
 def assert_allowed_sitemap(config: ScopeConfig, sitemap_url: str) -> None:
-    if not config.allowed_sitemap_prefixes:
-        raise GscSafetyError("EMPTY_ALLOWLIST", "MCP_CONFIG.sitemaps is empty.")
-    if not any(
+    if config.allowed_sitemap_prefixes and not any(
         sitemap_url.startswith(prefix)
         for prefix in config.allowed_sitemap_prefixes
     ):

@@ -10,6 +10,11 @@ from googleapiclient.errors import HttpError
 from httplib2 import Response
 
 from gsc_safe import GscSafetyError, google_api
+from gsc_safe.config import (
+    assert_allowed_site,
+    assert_allowed_sitemap,
+    load_scope_config,
+)
 from gsc_safe.tools import (
     gsc_add_site,
     gsc_batch_operations,
@@ -42,6 +47,13 @@ def http_404() -> HttpError:
 
 
 class DirectCrudTests(unittest.TestCase):
+    def test_missing_config_allows_all_accessible_resources(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_scope_config()
+        assert_allowed_site(config, "sc-domain:any-example.com")
+        assert_allowed_sitemap(config, "https://any-example.com/sitemap.xml")
+        self.assertEqual(config.max_operations_per_request, 10)
+
     def test_status_reports_direct_contract_without_gate_state(self):
         legacy = {
             **BASE_ENV,

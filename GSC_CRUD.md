@@ -33,10 +33,11 @@ restore operations.
 Delete tools are idempotent. Deleting an already absent Site or Sitemap returns
 success with `ALREADY_ABSENT`.
 
-## Horizon deployment: two keys
+## Horizon deployment: at most two keys
 
 ```text
 MCP_CREDENTIALS=<base64-encoded credential envelope>
+# Optional restriction:
 MCP_CONFIG={"sites":["sc-domain:example.com"],"sitemaps":["https://www.example.com/"],"max_operations":10}
 ```
 
@@ -48,7 +49,12 @@ The decoded credential envelope is:
 
 `google_credentials` contains the complete Google credential JSON. No
 additional GSC credential, allowlist, limit, mutation, or confirmation
-variables are used by the Horizon entrypoint. The old
+variables are used by the Horizon entrypoint.
+
+`MCP_CONFIG` is optional. When it is absent, or its allowlist arrays are
+absent or empty, all Search Console resources accessible to the credential are
+allowed and the default batch limit is 10. Supply it only to narrow scope or
+change the batch limit. The old
 `GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64`, `GSC_ALLOWED_*`, `GSC_MAX_*`,
 `GSC_ADMIN_MUTATIONS_ENABLED`, `GSC_ALLOW_*`, and `GSC_CONFIRMATION_*`
 deployment variables should be removed.

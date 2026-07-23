@@ -412,8 +412,8 @@ The MCP server runs locally on your machine. It only works in the **Claude Deskt
 ## Legacy stdio safety: destructive operations
 
 This section applies only to the legacy `gsc_server.py` runtime. The Prefect
-Horizon entrypoint uses allowlists plus ChatGPT Action control and has no
-connector action gate.
+Horizon entrypoint has no connector action gate; optional `MCP_CONFIG`
+allowlists can narrow the resources accessible to its Google credential.
 
 In the legacy stdio runtime, `add_site`, `delete_site`, and `delete_sitemap`
 are disabled by default. To enable them:
