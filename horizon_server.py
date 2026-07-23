@@ -47,49 +47,66 @@ from mcp.types import ToolAnnotations  # noqa: E402
 import gsc_server as legacy  # noqa: E402
 from gsc_safe import (  # noqa: E402
     GscSafetyError,
-    gsc_batch_operations,
     gsc_confirmation_diagnostics,
-    gsc_create_resource,
-    gsc_delete_resource,
+    gsc_execute_site_add,
+    gsc_execute_site_delete,
+    gsc_execute_sitemap_delete,
+    gsc_execute_sitemap_submit,
     gsc_get_mutation_schema,
     gsc_get_resource,
     gsc_list_mutable_resources,
     gsc_list_resources,
+    gsc_prepare_site_add,
+    gsc_prepare_site_delete,
+    gsc_prepare_sitemap_delete,
+    gsc_prepare_sitemap_submit,
     gsc_safety_status,
 )
 
 ToolFunction = Callable[..., Awaitable[Any]]
+ToolDefinition = tuple[ToolFunction, str]
 
-_READ_TOOLS: tuple[ToolFunction, ...] = tuple(
-    function
-    for function in (
-        getattr(legacy, "list_properties", None),
-        getattr(legacy, "get_site_details", None),
-        getattr(legacy, "get_search_analytics", None),
-        getattr(legacy, "get_performance_overview", None),
-        getattr(legacy, "compare_search_periods", None),
-        getattr(legacy, "get_search_by_page_query", None),
-        getattr(legacy, "get_advanced_search_analytics", None),
-        getattr(legacy, "inspect_url_enhanced", None),
-        getattr(legacy, "batch_url_inspection", None),
-        getattr(legacy, "check_indexing_issues", None),
-        getattr(legacy, "get_sitemaps", None),
-        getattr(legacy, "list_sitemaps_enhanced", None),
-        getattr(legacy, "get_sitemap_details", None),
-        gsc_safety_status,
-        gsc_confirmation_diagnostics,
-        gsc_list_mutable_resources,
-        gsc_get_mutation_schema,
-        gsc_get_resource,
-        gsc_list_resources,
+_READ_TOOLS: tuple[ToolDefinition, ...] = tuple(
+    (function, title)
+    for function, title in (
+        (getattr(legacy, "list_properties", None), "List Search Console Properties"),
+        (getattr(legacy, "get_site_details", None), "Get Search Console Site Details"),
+        (getattr(legacy, "get_search_analytics", None), "Get Search Analytics"),
+        (getattr(legacy, "get_performance_overview", None), "Get Performance Overview"),
+        (getattr(legacy, "compare_search_periods", None), "Compare Search Periods"),
+        (getattr(legacy, "get_search_by_page_query", None), "Get Search by Page and Query"),
+        (getattr(legacy, "get_advanced_search_analytics", None), "Get Advanced Search Analytics"),
+        (getattr(legacy, "inspect_url_enhanced", None), "Inspect URL"),
+        (getattr(legacy, "batch_url_inspection", None), "Batch URL Inspection"),
+        (getattr(legacy, "check_indexing_issues", None), "Check Indexing Issues"),
+        (getattr(legacy, "get_sitemaps", None), "Get Sitemaps"),
+        (getattr(legacy, "list_sitemaps_enhanced", None), "List Sitemaps Enhanced"),
+        (getattr(legacy, "get_sitemap_details", None), "Get Sitemap Details"),
+        (gsc_safety_status, "Get GSC Safety Status"),
+        (gsc_confirmation_diagnostics, "Run GSC Confirmation Diagnostics"),
+        (gsc_list_mutable_resources, "List GSC Mutable Resources"),
+        (gsc_get_mutation_schema, "Get GSC Mutation Schema"),
+        (gsc_get_resource, "Get Allowlisted GSC Resource"),
+        (gsc_list_resources, "List Allowlisted GSC Resources"),
     )
     if function is not None
 )
 
-_MUTATION_TOOLS: tuple[ToolFunction, ...] = (
-    gsc_create_resource,
-    gsc_delete_resource,
-    gsc_batch_operations,
+_PREPARE_TOOLS: tuple[ToolDefinition, ...] = (
+    (gsc_prepare_site_add, "Prepare Search Console Site Add"),
+    (gsc_prepare_site_delete, "Prepare Search Console Site Delete"),
+    (gsc_prepare_sitemap_submit, "Prepare Search Console Sitemap Submit"),
+    (gsc_prepare_sitemap_delete, "Prepare Search Console Sitemap Delete"),
+)
+
+_ADDITIVE_WRITE_TOOLS: tuple[ToolDefinition, ...] = (
+    (gsc_execute_site_add, "Execute Search Console Site Add"),
+    (gsc_execute_sitemap_submit, "Execute Search Console Sitemap Submit"),
+)
+
+_DESTRUCTIVE_WRITE_TOOLS: tuple[ToolDefinition, ...] = (
+    (gsc_execute_site_delete, "Execute Search Console Site Delete"),
+    (gsc_execute_sitemap_delete, "Execute Search Console Sitemap Delete"),
 )
 
 
@@ -107,21 +124,89 @@ def _with_structured_errors(function: ToolFunction) -> ToolFunction:
     return wrapped
 
 
-def _add_tool(server: FastMCP, function: ToolFunction, *, read_only: bool) -> None:
+def _tool_annotations(
+    title: str,
+    *,
+    read_only: bool,
+    destructive: bool,
+    idempotent: bool,
+    open_world: bool,
+) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=read_only,
+        destructiveHint=destructive,
+        idempotentHint=idempotent,
+        openWorldHint=open_world,
+    )
+
+
+def _add_tool(
+    server: FastMCP,
+    function: ToolFunction,
+    title: str,
+    *,
+    read_only: bool,
+    destructive: bool,
+    idempotent: bool,
+    open_world: bool,
+) -> None:
     server.add_tool(
         Tool.from_function(
             _with_structured_errors(function),
-            annotations=ToolAnnotations(readOnlyHint=read_only),
+            annotations=_tool_annotations(
+                title,
+                read_only=read_only,
+                destructive=destructive,
+                idempotent=idempotent,
+                open_world=open_world,
+            ),
         )
     )
 
 
 def create_horizon_server() -> FastMCP:
     server = FastMCP("Google Search Console MCP Server")
-    for function in _READ_TOOLS:
-        _add_tool(server, function, read_only=True)
-    for function in _MUTATION_TOOLS:
-        _add_tool(server, function, read_only=False)
+    for function, title in _READ_TOOLS:
+        _add_tool(
+            server,
+            function,
+            title,
+            read_only=True,
+            destructive=False,
+            idempotent=True,
+            open_world=True,
+        )
+    for function, title in _PREPARE_TOOLS:
+        _add_tool(
+            server,
+            function,
+            title,
+            read_only=True,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        )
+    for function, title in _ADDITIVE_WRITE_TOOLS:
+        _add_tool(
+            server,
+            function,
+            title,
+            read_only=False,
+            destructive=False,
+            idempotent=True,
+            open_world=False,
+        )
+    for function, title in _DESTRUCTIVE_WRITE_TOOLS:
+        _add_tool(
+            server,
+            function,
+            title,
+            read_only=False,
+            destructive=True,
+            idempotent=True,
+            open_world=False,
+        )
     return server
 
 

@@ -74,6 +74,17 @@ async def gsc_list_mutable_resources() -> dict[str, Any]:
             for resource, details in RESOURCE_REGISTRY.items()
         ],
         "unsupported_actions": ["update", "archive", "restore"],
+        "horizon_public_mutation_tools": [
+            "gsc_prepare_site_add",
+            "gsc_execute_site_add",
+            "gsc_prepare_site_delete",
+            "gsc_execute_site_delete",
+            "gsc_prepare_sitemap_submit",
+            "gsc_execute_sitemap_submit",
+            "gsc_prepare_sitemap_delete",
+            "gsc_execute_sitemap_delete",
+        ],
+        "generic_internal_facade_exposed_by_horizon": False,
     }
 
 
@@ -90,21 +101,27 @@ async def gsc_get_mutation_schema(resource: str, action: str) -> dict[str, Any]:
         ("Site", "delete"): {"required": ["site_url"], "data": None},
         ("Site", "get"): {"required": ["site_url"]},
         ("Site", "list"): {"required": []},
-        ("Sitemap", "submit"): {"required": ["site_url", "data.sitemap_url"]},
-        ("Sitemap", "delete"): {"required": ["site_url", "resource_name"]},
+        ("Sitemap", "submit"): {"required": ["site_url", "sitemap_url"]},
+        ("Sitemap", "delete"): {"required": ["site_url", "sitemap_url"]},
         ("Sitemap", "get"): {"required": ["site_url", "resource_name"]},
         ("Sitemap", "list"): {"required": ["site_url"]},
     }
-    return {
+    result = {
         "resource": resource,
         "action": action,
         "schema": schemas[(resource, action)],
-        "validate_only": {
-            "supported": action in {"add", "submit", "delete"},
-            "kind": "CONNECTOR_PREFLIGHT",
-            "native_google_api_validation": False,
-        },
     }
+    if action in {"add", "submit", "delete"}:
+        tool_suffix = f"{resource.lower()}_{action}"
+        result["workflow"] = {
+            "prepare_tool": f"gsc_prepare_{tool_suffix}",
+            "execute_tool": f"gsc_execute_{tool_suffix}",
+            "prepare_is_read_only": True,
+            "execute_requires_confirmation": True,
+            "validation_kind": "CONNECTOR_PREFLIGHT",
+            "native_google_api_validation": False,
+        }
+    return result
 
 
 async def gsc_get_resource(
@@ -158,6 +175,100 @@ async def gsc_list_resources(resource: str, site_url: str | None = None) -> dict
     raise GscSafetyError("UNSUPPORTED_RESOURCE", f"Unsupported resource: {resource!r}.")
 
 
+def _require_confirmation(confirmation: str) -> str:
+    value = str(confirmation or "").strip()
+    if not value:
+        raise GscSafetyError(
+            "CONFIRMATION_REQUIRED",
+            "An exact confirmation receipt from the matching prepare tool is required.",
+        )
+    return value
+
+
+async def gsc_prepare_site_add(site_url: str) -> dict[str, Any]:
+    """Prepare Site.add and issue a confirmation receipt without mutating Google."""
+
+    return await gsc_create_resource("Site", site_url, validate_only=True)
+
+
+async def gsc_execute_site_add(site_url: str, confirmation: str) -> dict[str, Any]:
+    """Execute Site.add using the exact receipt from gsc_prepare_site_add."""
+
+    return await gsc_create_resource(
+        "Site",
+        site_url,
+        validate_only=False,
+        confirmation=_require_confirmation(confirmation),
+    )
+
+
+async def gsc_prepare_site_delete(site_url: str) -> dict[str, Any]:
+    """Prepare Site.delete and issue a confirmation receipt without mutating Google."""
+
+    return await gsc_delete_resource("Site", site_url, validate_only=True)
+
+
+async def gsc_execute_site_delete(site_url: str, confirmation: str) -> dict[str, Any]:
+    """Execute Site.delete using the exact receipt from gsc_prepare_site_delete."""
+
+    return await gsc_delete_resource(
+        "Site",
+        site_url,
+        validate_only=False,
+        confirmation=_require_confirmation(confirmation),
+    )
+
+
+async def gsc_prepare_sitemap_submit(site_url: str, sitemap_url: str) -> dict[str, Any]:
+    """Prepare Sitemap.submit and issue a confirmation receipt without mutating Google."""
+
+    return await gsc_create_resource(
+        "Sitemap",
+        site_url,
+        data={"sitemap_url": sitemap_url},
+        validate_only=True,
+    )
+
+
+async def gsc_execute_sitemap_submit(
+    site_url: str, sitemap_url: str, confirmation: str
+) -> dict[str, Any]:
+    """Execute Sitemap.submit using the exact receipt from the matching prepare tool."""
+
+    return await gsc_create_resource(
+        "Sitemap",
+        site_url,
+        data={"sitemap_url": sitemap_url},
+        validate_only=False,
+        confirmation=_require_confirmation(confirmation),
+    )
+
+
+async def gsc_prepare_sitemap_delete(site_url: str, sitemap_url: str) -> dict[str, Any]:
+    """Prepare Sitemap.delete and issue a confirmation receipt without mutating Google."""
+
+    return await gsc_delete_resource(
+        "Sitemap",
+        site_url,
+        resource_name=sitemap_url,
+        validate_only=True,
+    )
+
+
+async def gsc_execute_sitemap_delete(
+    site_url: str, sitemap_url: str, confirmation: str
+) -> dict[str, Any]:
+    """Execute Sitemap.delete using the exact receipt from the matching prepare tool."""
+
+    return await gsc_delete_resource(
+        "Sitemap",
+        site_url,
+        resource_name=sitemap_url,
+        validate_only=False,
+        confirmation=_require_confirmation(confirmation),
+    )
+
+
 async def gsc_create_resource(
     resource: str,
     site_url: str,
@@ -165,7 +276,7 @@ async def gsc_create_resource(
     validate_only: bool = True,
     confirmation: str | None = None,
 ) -> dict[str, Any]:
-    """Preflight or execute Site.add / Sitemap.submit."""
+    """Internal generic facade for Site.add / Sitemap.submit."""
 
     resource = resource.strip()
     if resource not in RESOURCE_REGISTRY:
@@ -191,7 +302,7 @@ async def gsc_delete_resource(
     validate_only: bool = True,
     confirmation: str | None = None,
 ) -> dict[str, Any]:
-    """Preflight or execute Site.delete / Sitemap.delete."""
+    """Internal generic facade for Site.delete / Sitemap.delete."""
 
     return coordinate(
         [
@@ -212,6 +323,6 @@ async def gsc_batch_operations(
     validate_only: bool = True,
     confirmation: str | None = None,
 ) -> dict[str, Any]:
-    """Preflight or execute up to ten sequential, non-atomic operations."""
+    """Internal generic batch facade; not exposed by the Horizon server."""
 
     return coordinate(operations, validate_only=validate_only, confirmation=confirmation)
