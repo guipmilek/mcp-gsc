@@ -14,22 +14,24 @@ _ADC_PATH = Path("/tmp/google-search-console-adc.json")
 
 
 def _configure_deployment_credentials() -> Path | None:
-    """Materialize Google ADC from the shared MCP_CREDENTIALS envelope."""
+    """Materialize Google ADC from an envelope or raw credential object."""
 
     encoded = os.getenv("MCP_CREDENTIALS", "").strip()
     if not encoded:
         return None
     try:
-        envelope = json.loads(
+        payload = json.loads(
             base64.b64decode(encoded, validate=True).decode("utf-8")
         )
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(
             "MCP_CREDENTIALS must be a base64-encoded JSON object."
         ) from exc
-    if not isinstance(envelope, dict):
+    if not isinstance(payload, dict):
         raise RuntimeError("MCP_CREDENTIALS must decode to a JSON object.")
-    credentials = envelope.get("google_credentials")
+    credentials = payload.get("google_credentials")
+    if credentials is None and isinstance(payload.get("type"), str):
+        credentials = payload
     if credentials is None:
         return None
     if not isinstance(credentials, dict):

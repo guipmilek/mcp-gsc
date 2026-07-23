@@ -42,6 +42,21 @@ class DirectToolContractTests(unittest.TestCase):
                 self.assertEqual(target, configured)
                 self.assertEqual(credentials, json.loads(target.read_text()))
 
+    def test_raw_credentials_materialize_adc(self):
+        credentials = {"type": "service_account", "project_id": "test"}
+        encoded = base64.b64encode(json.dumps(credentials).encode()).decode()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "adc.json"
+            with (
+                patch.dict(
+                    os.environ, {"MCP_CREDENTIALS": encoded}, clear=True
+                ),
+                patch.object(horizon_server, "_ADC_PATH", target),
+            ):
+                configured = horizon_server._configure_deployment_credentials()
+                self.assertEqual(target, configured)
+                self.assertEqual(credentials, json.loads(target.read_text()))
+
     def test_public_signatures_have_only_direct_inputs(self):
         self.assertEqual(
             list(inspect.signature(gsc_add_site).parameters),
