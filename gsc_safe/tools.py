@@ -44,8 +44,11 @@ async def gsc_safety_status() -> dict[str, Any]:
         "confirmation_secret_minimum_bytes": MINIMUM_SECRET_BYTES,
         "operation_hash_version": OPERATION_HASH_VERSION,
         "confirmation_token_version": CONFIRMATION_TOKEN_VERSION,
+        "confirmation_format": "SHORT_HMAC_APPROVAL_CODE",
         "replay_protection": "BEST_EFFORT_PROCESS_LOCAL",
         "globally_single_use": False,
+        "cross_instance_valid": True,
+        "cross_instance_requirement": "MATCHING_CONFIRMATION_KEY_ID",
         "atomic": False,
         "execution_strategy": "SEQUENTIAL_STOP_ON_FIRST_ERROR",
         "admin_api_validate_only_supported": False,
@@ -54,7 +57,7 @@ async def gsc_safety_status() -> dict[str, Any]:
 
 
 async def gsc_confirmation_diagnostics() -> dict[str, Any]:
-    """Verify local confirmation signing without exposing or consuming a token."""
+    """Verify local approval-code signing without exposing or consuming a code."""
 
     return diagnostics(load_safety_config())
 
@@ -85,6 +88,8 @@ async def gsc_list_mutable_resources() -> dict[str, Any]:
             "gsc_execute_sitemap_delete",
         ],
         "generic_internal_facade_exposed_by_horizon": False,
+        "approval_code_argument": "approval_code",
+        "approval_code_format": "SHORT_HMAC_APPROVAL_CODE",
     }
 
 
@@ -113,11 +118,15 @@ async def gsc_get_mutation_schema(resource: str, action: str) -> dict[str, Any]:
     }
     if action in {"add", "submit", "delete"}:
         tool_suffix = f"{resource.lower()}_{action}"
+        prepare_required = list(schemas[(resource, action)]["required"])
         result["workflow"] = {
             "prepare_tool": f"gsc_prepare_{tool_suffix}",
             "execute_tool": f"gsc_execute_{tool_suffix}",
+            "prepare_required": prepare_required,
+            "execute_required": [*prepare_required, "approval_code"],
             "prepare_is_read_only": True,
-            "execute_requires_confirmation": True,
+            "execute_requires_approval_code": True,
+            "approval_code_format": "SHORT_HMAC_APPROVAL_CODE",
             "validation_kind": "CONNECTOR_PREFLIGHT",
             "native_google_api_validation": False,
         }
@@ -175,52 +184,52 @@ async def gsc_list_resources(resource: str, site_url: str | None = None) -> dict
     raise GscSafetyError("UNSUPPORTED_RESOURCE", f"Unsupported resource: {resource!r}.")
 
 
-def _require_confirmation(confirmation: str) -> str:
-    value = str(confirmation or "").strip()
+def _require_approval_code(approval_code: str) -> str:
+    value = str(approval_code or "").strip()
     if not value:
         raise GscSafetyError(
             "CONFIRMATION_REQUIRED",
-            "An exact confirmation receipt from the matching prepare tool is required.",
+            "The short approval_code returned by the matching prepare tool is required.",
         )
     return value
 
 
 async def gsc_prepare_site_add(site_url: str) -> dict[str, Any]:
-    """Prepare Site.add and issue a confirmation receipt without mutating Google."""
+    """Prepare Site.add and return a short one-time approval code without mutating Google."""
 
     return await gsc_create_resource("Site", site_url, validate_only=True)
 
 
-async def gsc_execute_site_add(site_url: str, confirmation: str) -> dict[str, Any]:
-    """Execute Site.add using the exact receipt from gsc_prepare_site_add."""
+async def gsc_execute_site_add(site_url: str, approval_code: str) -> dict[str, Any]:
+    """Execute Site.add using the short approval code returned by gsc_prepare_site_add."""
 
     return await gsc_create_resource(
         "Site",
         site_url,
         validate_only=False,
-        confirmation=_require_confirmation(confirmation),
+        confirmation=_require_approval_code(approval_code),
     )
 
 
 async def gsc_prepare_site_delete(site_url: str) -> dict[str, Any]:
-    """Prepare Site.delete and issue a confirmation receipt without mutating Google."""
+    """Prepare Site.delete and return a short one-time approval code without mutating Google."""
 
     return await gsc_delete_resource("Site", site_url, validate_only=True)
 
 
-async def gsc_execute_site_delete(site_url: str, confirmation: str) -> dict[str, Any]:
-    """Execute Site.delete using the exact receipt from gsc_prepare_site_delete."""
+async def gsc_execute_site_delete(site_url: str, approval_code: str) -> dict[str, Any]:
+    """Execute Site.delete using the short approval code returned by gsc_prepare_site_delete."""
 
     return await gsc_delete_resource(
         "Site",
         site_url,
         validate_only=False,
-        confirmation=_require_confirmation(confirmation),
+        confirmation=_require_approval_code(approval_code),
     )
 
 
 async def gsc_prepare_sitemap_submit(site_url: str, sitemap_url: str) -> dict[str, Any]:
-    """Prepare Sitemap.submit and issue a confirmation receipt without mutating Google."""
+    """Prepare Sitemap.submit and return a short one-time approval code without mutating Google."""
 
     return await gsc_create_resource(
         "Sitemap",
@@ -231,21 +240,21 @@ async def gsc_prepare_sitemap_submit(site_url: str, sitemap_url: str) -> dict[st
 
 
 async def gsc_execute_sitemap_submit(
-    site_url: str, sitemap_url: str, confirmation: str
+    site_url: str, sitemap_url: str, approval_code: str
 ) -> dict[str, Any]:
-    """Execute Sitemap.submit using the exact receipt from the matching prepare tool."""
+    """Execute Sitemap.submit using the short code from gsc_prepare_sitemap_submit."""
 
     return await gsc_create_resource(
         "Sitemap",
         site_url,
         data={"sitemap_url": sitemap_url},
         validate_only=False,
-        confirmation=_require_confirmation(confirmation),
+        confirmation=_require_approval_code(approval_code),
     )
 
 
 async def gsc_prepare_sitemap_delete(site_url: str, sitemap_url: str) -> dict[str, Any]:
-    """Prepare Sitemap.delete and issue a confirmation receipt without mutating Google."""
+    """Prepare Sitemap.delete and return a short one-time approval code without mutating Google."""
 
     return await gsc_delete_resource(
         "Sitemap",
@@ -256,16 +265,16 @@ async def gsc_prepare_sitemap_delete(site_url: str, sitemap_url: str) -> dict[st
 
 
 async def gsc_execute_sitemap_delete(
-    site_url: str, sitemap_url: str, confirmation: str
+    site_url: str, sitemap_url: str, approval_code: str
 ) -> dict[str, Any]:
-    """Execute Sitemap.delete using the exact receipt from the matching prepare tool."""
+    """Execute Sitemap.delete using the short code from gsc_prepare_sitemap_delete."""
 
     return await gsc_delete_resource(
         "Sitemap",
         site_url,
         resource_name=sitemap_url,
         validate_only=False,
-        confirmation=_require_confirmation(confirmation),
+        confirmation=_require_approval_code(approval_code),
     )
 
 

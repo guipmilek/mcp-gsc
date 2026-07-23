@@ -1,4 +1,4 @@
-"""Read/preflight/confirm/execute/verify coordinator for GSC mutations."""
+"""Read/preflight/approve/execute/verify coordinator for GSC mutations."""
 
 from __future__ import annotations
 
@@ -170,10 +170,11 @@ def coordinate(
     op_hash = operation_hash(operations)
     pph = preconditions_hash(operations)
     operation_scope = scope(operations)
+    site_urls = [item["site_url"] for item in operations]
 
     if validate_only:
-        receipt, expires, confirmation_key_id = issue_confirmation(
-            config, op_hash, pph, [item["site_url"] for item in operations]
+        approval_code, expires, confirmation_key_id = issue_confirmation(
+            config, op_hash, pph, site_urls
         )
         return {
             "runtime": "PYTHON_FASTMCP_HORIZON",
@@ -200,21 +201,23 @@ def coordinate(
             "operation_hash": op_hash,
             "operation_hash_version": OPERATION_HASH_VERSION,
             "confirmation_token_version": CONFIRMATION_TOKEN_VERSION,
+            "confirmation_format": "SHORT_HMAC_APPROVAL_CODE",
             "confirmation_key_id": confirmation_key_id,
             "confirmation_issued_by_process_instance_id": PROCESS_INSTANCE_ID,
-            "required_confirmation": receipt,
+            "required_approval_code": approval_code,
             "validation_receipt": {
                 "confirmation_key_id": confirmation_key_id,
                 "issued_by_process_instance_id": PROCESS_INSTANCE_ID,
-                "cross_instance_valid": None,
+                "cross_instance_valid": True,
                 "cross_instance_requirement": "MATCHING_CONFIRMATION_KEY_ID",
                 "replay_protection": "BEST_EFFORT_PROCESS_LOCAL",
                 "globally_single_use": False,
                 "expires_at": expires.isoformat(),
+                "format": "SHORT_HMAC_APPROVAL_CODE",
             },
         }
 
-    verified = verify_confirmation(config, confirmation or "", op_hash, pph)
+    verified = verify_confirmation(config, confirmation or "", op_hash, pph, site_urls)
     refresh_preconditions(operations)
     client = google_api.service()
     results: list[dict[str, Any]] = []
@@ -288,9 +291,11 @@ def coordinate(
             "claims_limited_to_requested_resources": True,
         },
         "confirmation_verified": True,
+        "approval_code_verified": True,
         "confirmation_registered_before_api_call": True,
-        "confirmation_token_fingerprint": verified.token_fingerprint,
+        "approval_code_fingerprint": verified.token_fingerprint,
         "confirmation_token_version": CONFIRMATION_TOKEN_VERSION,
+        "confirmation_format": "SHORT_HMAC_APPROVAL_CODE",
         "confirmation_key_id": verified.key_id,
         "confirmation_key_source": verified.key_source,
         "confirmation_issued_by_process_instance_id": verified.issued_by_process_instance_id,

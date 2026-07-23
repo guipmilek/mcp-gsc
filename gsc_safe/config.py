@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 OPERATION_HASH_VERSION = 3
-CONFIRMATION_TOKEN_VERSION = 2
+CONFIRMATION_TOKEN_VERSION = 3
 MINIMUM_SECRET_BYTES = 32
 
 RESOURCE_REGISTRY: dict[str, dict[str, Any]] = {

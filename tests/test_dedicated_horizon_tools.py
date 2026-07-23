@@ -60,7 +60,7 @@ class DedicatedToolTests(unittest.TestCase):
         )
         self.assertEqual(
             list(inspect.signature(gsc_execute_sitemap_submit).parameters),
-            ["site_url", "sitemap_url", "confirmation"],
+            ["site_url", "sitemap_url", "approval_code"],
         )
         self.assertEqual(
             list(inspect.signature(gsc_prepare_sitemap_delete).parameters),
@@ -68,7 +68,7 @@ class DedicatedToolTests(unittest.TestCase):
         )
         self.assertEqual(
             list(inspect.signature(gsc_execute_sitemap_delete).parameters),
-            ["site_url", "sitemap_url", "confirmation"],
+            ["site_url", "sitemap_url", "approval_code"],
         )
 
     def test_prepare_sitemap_submit_never_calls_mutation(self):
@@ -80,9 +80,11 @@ class DedicatedToolTests(unittest.TestCase):
             result = run(gsc_prepare_sitemap_submit(SITE_URL, SITEMAP_URL))
         self.assertEqual(result["mode"], "VALIDATE_ONLY")
         self.assertFalse(result["execution_attempted"])
+        self.assertTrue(result["required_approval_code"].startswith("GSC3-"))
+        self.assertNotIn(".", result["required_approval_code"])
         service.sitemaps().submit.assert_not_called()
 
-    def test_execute_rejects_missing_confirmation_before_api_read(self):
+    def test_execute_rejects_missing_approval_code_before_api_read(self):
         service = MagicMock()
         with patch.dict(os.environ, BASE_ENV, clear=True), patch.object(
             google_api, "service", return_value=service
@@ -111,11 +113,12 @@ class DedicatedToolTests(unittest.TestCase):
                 gsc_execute_sitemap_submit(
                     SITE_URL,
                     SITEMAP_URL,
-                    preflight["required_confirmation"],
+                    preflight["required_approval_code"],
                 )
             )
         self.assertEqual(result["execution_status"], "SUCCEEDED")
         self.assertTrue(result["confirmation_verified"])
+        self.assertTrue(result["approval_code_verified"])
         service.sitemaps().submit.assert_called_once_with(
             siteUrl=SITE_URL,
             feedpath=SITEMAP_URL,
@@ -142,11 +145,12 @@ class DedicatedToolTests(unittest.TestCase):
                 gsc_execute_sitemap_delete(
                     SITE_URL,
                     SITEMAP_URL,
-                    preflight["required_confirmation"],
+                    preflight["required_approval_code"],
                 )
             )
         self.assertEqual(result["execution_status"], "SUCCEEDED")
         self.assertTrue(result["confirmation_verified"])
+        self.assertTrue(result["approval_code_verified"])
         service.sitemaps().delete.assert_called_once_with(
             siteUrl=SITE_URL,
             feedpath=SITEMAP_URL,

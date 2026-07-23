@@ -44,6 +44,8 @@ class SafeCrudTests(unittest.TestCase):
         self.assertTrue(result["confirmation_secret_configured"])
         self.assertNotIn(BASE_ENV["GSC_CONFIRMATION_SECRET"], str(result))
         self.assertEqual(result["operation_hash_version"], 3)
+        self.assertEqual(result["confirmation_token_version"], 3)
+        self.assertEqual(result["confirmation_format"], "SHORT_HMAC_APPROVAL_CODE")
 
     def test_diagnostics_issues_and_verifies_without_replay(self):
         with patch.dict(os.environ, BASE_ENV, clear=True):
@@ -51,6 +53,8 @@ class SafeCrudTests(unittest.TestCase):
         self.assertTrue(result["self_test"]["issued"])
         self.assertTrue(result["self_test"]["verified"])
         self.assertFalse(result["self_test"]["replay_registered"])
+        self.assertTrue(result["cross_instance_valid"])
+        self.assertEqual(result["confirmation_format"], "SHORT_HMAC_APPROVAL_CODE")
         self.assertEqual(confirmations._CONSUMED_CONFIRMATIONS, set())
 
     def test_site_outside_allowlist_fails_closed(self):
@@ -83,6 +87,10 @@ class SafeCrudTests(unittest.TestCase):
             result = run(gsc_create_resource("Site", "sc-domain:example.com"))
         self.assertEqual(result["mode"], "VALIDATE_ONLY")
         self.assertFalse(result["execution_attempted"])
+        self.assertIn("required_approval_code", result)
+        self.assertNotIn("required_confirmation", result)
+        self.assertTrue(result["required_approval_code"].startswith("GSC3-"))
+        self.assertNotIn(".", result["required_approval_code"])
         service.sites().add.assert_not_called()
 
     def test_create_executes_once_and_verifies(self):
@@ -105,11 +113,12 @@ class SafeCrudTests(unittest.TestCase):
                     "Site",
                     "sc-domain:example.com",
                     validate_only=False,
-                    confirmation=preflight["required_confirmation"],
+                    confirmation=preflight["required_approval_code"],
                 )
             )
         self.assertEqual(result["execution_status"], "SUCCEEDED")
         self.assertTrue(result["confirmation_verified"])
+        self.assertTrue(result["approval_code_verified"])
         add_request.execute.assert_called_once_with()
 
     def test_replay_is_rejected_before_another_api_read(self):
@@ -125,12 +134,13 @@ class SafeCrudTests(unittest.TestCase):
             google_api, "service", return_value=service
         ):
             preflight = run(gsc_create_resource("Site", "sc-domain:example.com"))
+            approval_code = preflight["required_approval_code"]
             run(
                 gsc_create_resource(
                     "Site",
                     "sc-domain:example.com",
                     validate_only=False,
-                    confirmation=preflight["required_confirmation"],
+                    confirmation=approval_code,
                 )
             )
             prior_reads = service.sites().get().execute.call_count
@@ -140,7 +150,7 @@ class SafeCrudTests(unittest.TestCase):
                         "Site",
                         "sc-domain:example.com",
                         validate_only=False,
-                        confirmation=preflight["required_confirmation"],
+                        confirmation=approval_code,
                     )
                 )
         self.assertEqual(ctx.exception.code, "CONFIRMATION_REPLAYED")
@@ -161,7 +171,7 @@ class SafeCrudTests(unittest.TestCase):
                             "Site",
                             "sc-domain:example.com",
                             validate_only=False,
-                            confirmation=preflight["required_confirmation"],
+                            confirmation=preflight["required_approval_code"],
                         )
                     )
         self.assertEqual(ctx.exception.code, "CONFIRMATION_KEY_MISMATCH")
@@ -173,8 +183,8 @@ class SafeCrudTests(unittest.TestCase):
             google_api, "service", return_value=service
         ):
             preflight = run(gsc_create_resource("Site", "sc-domain:example.com"))
-            token = preflight["required_confirmation"]
-            tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+            code = preflight["required_approval_code"]
+            tampered = code[:-1] + ("0" if code[-1] != "0" else "1")
             with self.assertRaises(GscSafetyError) as ctx:
                 run(
                     gsc_create_resource(
