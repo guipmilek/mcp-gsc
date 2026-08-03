@@ -20,9 +20,7 @@ def _configure_deployment_credentials() -> Path | None:
     if not encoded:
         return None
     try:
-        payload = json.loads(
-            base64.b64decode(encoded, validate=True).decode("utf-8")
-        )
+        payload = json.loads(base64.b64decode(encoded, validate=True).decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(
             "MCP_CREDENTIALS must be a base64-encoded JSON object."
@@ -35,9 +33,7 @@ def _configure_deployment_credentials() -> Path | None:
     if credentials is None:
         return None
     if not isinstance(credentials, dict):
-        raise RuntimeError(
-            "MCP_CREDENTIALS.google_credentials must be a JSON object."
-        )
+        raise RuntimeError("MCP_CREDENTIALS.google_credentials must be a JSON object.")
 
     raw = json.dumps(credentials, separators=(",", ":")).encode("utf-8")
     path = _ADC_PATH
@@ -142,7 +138,15 @@ def _with_structured_errors(function: ToolFunction) -> ToolFunction:
     @wraps(function)
     async def wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
-            return await function(*args, **kwargs)
+            result = await function(*args, **kwargs)
+            if isinstance(result, str):
+                try:
+                    decoded = json.loads(result)
+                except json.JSONDecodeError:
+                    return result
+                if isinstance(decoded, (dict, list)):
+                    return decoded
+            return result
         except GscSafetyError as exc:
             return {"error": {"type": type(exc).__name__, **exc.as_dict()}}
         except Exception as exc:

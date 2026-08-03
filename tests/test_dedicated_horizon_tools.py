@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 import json
@@ -21,6 +22,7 @@ from horizon_server import (
     _ADDITIVE_WRITE_TOOLS,
     _DESTRUCTIVE_WRITE_TOOLS,
     _tool_annotations,
+    _with_structured_errors,
 )
 
 
@@ -33,9 +35,7 @@ class DirectToolContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "adc.json"
             with (
-                patch.dict(
-                    os.environ, {"MCP_CREDENTIALS": encoded}, clear=True
-                ),
+                patch.dict(os.environ, {"MCP_CREDENTIALS": encoded}, clear=True),
                 patch.object(horizon_server, "_ADC_PATH", target),
             ):
                 configured = horizon_server._configure_deployment_credentials()
@@ -48,9 +48,7 @@ class DirectToolContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "adc.json"
             with (
-                patch.dict(
-                    os.environ, {"MCP_CREDENTIALS": encoded}, clear=True
-                ),
+                patch.dict(os.environ, {"MCP_CREDENTIALS": encoded}, clear=True),
                 patch.object(horizon_server, "_ADC_PATH", target),
             ):
                 configured = horizon_server._configure_deployment_credentials()
@@ -81,9 +79,7 @@ class DirectToolContractTests(unittest.TestCase):
 
     def test_horizon_exposes_direct_tools_without_prepare_execute_pairs(self):
         additive = {function.__name__ for function, _ in _ADDITIVE_WRITE_TOOLS}
-        destructive = {
-            function.__name__ for function, _ in _DESTRUCTIVE_WRITE_TOOLS
-        }
+        destructive = {function.__name__ for function, _ in _DESTRUCTIVE_WRITE_TOOLS}
         exposed = additive | destructive
         self.assertEqual(additive, {"gsc_add_site", "gsc_submit_sitemap"})
         self.assertEqual(
@@ -121,6 +117,28 @@ class DirectToolContractTests(unittest.TestCase):
         self.assertTrue(destructive.destructiveHint)
         self.assertTrue(destructive.idempotentHint)
         self.assertTrue(destructive.openWorldHint)
+
+    def test_horizon_decodes_legacy_json_objects(self):
+        async def legacy_json():
+            return json.dumps({"count": 1, "properties": [{"site_url": "x"}]})
+
+        result = asyncio.run(_with_structured_errors(legacy_json)())
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["properties"][0]["site_url"], "x")
+
+    def test_horizon_preserves_plain_text_and_json_scalars(self):
+        async def plain_text():
+            return "No Search Console properties found."
+
+        async def json_scalar():
+            return json.dumps("Error")
+
+        self.assertEqual(
+            asyncio.run(_with_structured_errors(plain_text)()),
+            "No Search Console properties found.",
+        )
+        self.assertEqual(asyncio.run(_with_structured_errors(json_scalar)()), '"Error"')
 
 
 if __name__ == "__main__":
